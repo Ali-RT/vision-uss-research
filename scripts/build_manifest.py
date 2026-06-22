@@ -41,7 +41,11 @@ def main() -> None:
     paths = load_paths(profile=args.profile)
 
     raw_root = args.raw_dir.resolve() if args.raw_dir else paths.raw_data_root.resolve()
-    out_csv = args.out.resolve() if args.out else (paths.manifests_dir / "sequence_manifest.csv").resolve()
+    out_csv = (
+        args.out.resolve()
+        if args.out
+        else (paths.manifests_dir / "sequence_manifest.csv").resolve()
+    )
 
     if not raw_root.exists():
         raise FileNotFoundError(f"Raw data root does not exist: {raw_root}")
