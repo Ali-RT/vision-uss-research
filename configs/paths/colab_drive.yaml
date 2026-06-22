@@ -1,0 +1,9 @@
+profile_name: colab_drive
+
+paths:
+  project_root: /content/vision-uss-research
+  raw_data_root: /content/drive/MyDrive/vision_uss_sequences
+  manifests_dir: /content/drive/MyDrive/vision_uss_research_artifacts/manifests
+  processed_dir: /content/drive/MyDrive/vision_uss_research_artifacts/processed
+  samples_dir: /content/drive/MyDrive/vision_uss_research_artifacts/samples
+  outputs_dir: /content/drive/MyDrive/vision_uss_research_artifacts/outputs

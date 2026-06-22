@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Project artifacts
+outputs/
+data/processed/
+data/samples/
+data/manifests/
+
+# Keep folders
+!outputs/.gitkeep
+!data/processed/.gitkeep
+!data/samples/.gitkeep
+!data/manifests/.gitkeep

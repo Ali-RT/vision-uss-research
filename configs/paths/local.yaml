@@ -1,0 +1,9 @@
+profile_name: local
+
+paths:
+  project_root: .
+  raw_data_root: /Users/ral3ply/Library/CloudStorage/GoogleDrive-ali.rahim.taleqani@gmail.com/My Drive/vision_uss_sequences
+  manifests_dir: data/manifests
+  processed_dir: data/processed
+  samples_dir: data/samples
+  outputs_dir: outputs
