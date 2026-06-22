@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional output CSV path",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable tqdm progress bars",
+    )
     return parser.parse_args()
 
 
@@ -50,7 +55,7 @@ def main() -> None:
     if not raw_root.exists():
         raise FileNotFoundError(f"Raw data root does not exist: {raw_root}")
 
-    records = build_manifest(raw_root)
+    records = build_manifest(raw_root, show_progress=not args.no_progress)
     write_manifest_csv(records, out_csv)
 
     poc_ready = sum(1 for r in records if r.is_poc_ready)

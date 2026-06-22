@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from tqdm import tqdm
+
 
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
@@ -151,20 +153,33 @@ def _looks_like_sequence_dir(seq_dir: Path) -> bool:
     return evidence_count >= 3
 
 
-def discover_sequence_dirs(raw_root: Path) -> list[Path]:
+def discover_sequence_dirs(raw_root: Path, show_progress: bool = True) -> list[Path]:
     raw_root = raw_root.resolve()
+
+    print("Counting directories...")
+    all_dirs = [p for p in raw_root.rglob("*") if p.is_dir()]
+    print(f"Total directories found under raw root: {len(all_dirs)}")
+
     candidates: list[Path] = []
 
-    for path in raw_root.rglob("*"):
-        if not path.is_dir():
-            continue
+    iterator = all_dirs
+    if show_progress:
+        iterator = tqdm(all_dirs, desc="Scanning directories", unit="dir")
+
+    for path in iterator:
         if _looks_like_sequence_dir(path):
             candidates.append(path)
+            if show_progress and hasattr(iterator, "set_postfix"):
+                iterator.set_postfix(candidates=len(candidates))
 
     candidates = sorted(set(candidates))
     final_dirs: list[Path] = []
 
-    for candidate in candidates:
+    iterator2 = candidates
+    if show_progress:
+        iterator2 = tqdm(candidates, desc="Filtering nested candidates", unit="seq")
+
+    for candidate in iterator2:
         has_child_sequence = any(
             other != candidate and candidate in other.parents
             for other in candidates
@@ -175,13 +190,17 @@ def discover_sequence_dirs(raw_root: Path) -> list[Path]:
     return sorted(final_dirs)
 
 
-def build_manifest(raw_root: Path) -> list[SequenceRecord]:
+def build_manifest(raw_root: Path, show_progress: bool = True) -> list[SequenceRecord]:
     raw_root = raw_root.resolve()
-    sequence_dirs = discover_sequence_dirs(raw_root)
+    sequence_dirs = discover_sequence_dirs(raw_root, show_progress=show_progress)
 
     records: list[SequenceRecord] = []
 
-    for seq_dir in sequence_dirs:
+    iterator = sequence_dirs
+    if show_progress:
+        iterator = tqdm(sequence_dirs, desc="Building manifest records", unit="seq")
+
+    for seq_dir in iterator:
         found = _find_files(seq_dir)
         rel_dir = str(seq_dir.relative_to(raw_root))
         sequence_id = rel_dir.replace("\\", "__").replace("/", "__")
