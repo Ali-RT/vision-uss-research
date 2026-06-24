@@ -380,7 +380,7 @@ def main() -> None:
                     "ai_confidence": "",
                     "ai_reason": "",
                     "ai_raw_text": "",
-                    "ai_ratio_comparison": "",
+                    "ai_ratio_comparison": "", 
                     "ai_status": f"error: {type(e).__name__}: {e}",
                 }
             )

@@ -44,15 +44,26 @@ def safe_join(values: list[str]) -> str:
     return "|".join(out)
 
 
+def canonical_subcategory_name(name: str) -> str:
+    name = str(name or "").strip()
+    if "." in name:
+        name = name.split(".")[-1].strip()
+    return name
+
+
 def get_tags_by_subcategory(payload: dict[str, Any], subcategory_name: str) -> list[str]:
     values = []
+    target = subcategory_name.strip().lower()
+
     for tag in payload.get("tags", []):
         sub = tag.get("tagSubCategory", {}) or {}
-        sub_name = str(sub.get("name", "")).strip().lower()
-        if sub_name == subcategory_name.strip().lower():
+        sub_name = canonical_subcategory_name(str(sub.get("name", ""))).lower()
+
+        if sub_name == target:
             tag_name = str(tag.get("name", "")).strip()
             if tag_name:
                 values.append(tag_name)
+
     return values
 
 

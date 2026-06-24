@@ -109,11 +109,19 @@ def extract_custom_fields(payload: dict[str, Any]) -> list[dict[str, str]]:
     return fields_out
 
 
+def canonical_subcategory_name(name: str) -> str:
+    name = str(name or "").strip()
+    if "." in name:
+        name = name.split(".")[-1].strip()
+    return name
+
+
 def values_for_subcategory(tags: list[dict[str, str]], subcategory_name: str) -> list[str]:
     target = subcategory_name.strip().lower()
     values = []
     for tag in tags:
-        if tag["subcategory_name"].strip().lower() == target:
+        subcat = canonical_subcategory_name(tag["subcategory_name"]).lower()
+        if subcat == target:
             if tag["tag_name"]:
                 values.append(tag["tag_name"])
     return values
