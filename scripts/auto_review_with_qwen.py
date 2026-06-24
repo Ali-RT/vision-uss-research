@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import re
 import sys
@@ -53,13 +54,11 @@ def resolve_path(value: str, project_root: Path) -> Path:
 def extract_json_block(text: str) -> dict[str, Any]:
     text = text.strip()
 
-    # Try direct parse first
     try:
         return json.loads(text)
     except Exception:
         pass
 
-    # Remove fenced code block if present
     fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.DOTALL)
     if fence_match:
         candidate = fence_match.group(1)
@@ -68,7 +67,6 @@ def extract_json_block(text: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    # Find first JSON object
     brace_match = re.search(r"(\{.*\})", text, flags=re.DOTALL)
     if brace_match:
         candidate = brace_match.group(1)
@@ -188,6 +186,7 @@ def review_one_row(
         add_generation_prompt=True,
     )
     image_inputs, video_inputs = process_vision_info(messages)
+
     inputs = processor(
         text=[text],
         images=image_inputs,
@@ -211,6 +210,12 @@ def review_one_row(
     )[0]
 
     parsed = extract_json_block(output_text)
+
+    # Explicit cleanup before returning
+    del image_inputs, video_inputs
+    del inputs
+    del generated_ids
+    del trimmed_ids
 
     return {
         "ai_best_ratio": normalize_ratio(parsed.get("best_ratio", "")),
@@ -257,6 +262,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=MODEL_ID,
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Recompute rows even if they already exist in the output CSV",
+    )
     return parser.parse_args()
 
 
@@ -281,6 +291,23 @@ def main() -> None:
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
 
+    existing_rows: list[dict[str, Any]] = []
+    processed_ids: set[str] = set()
+
+    if out_csv.exists() and not args.overwrite:
+        existing_rows = load_csv(out_csv)
+        for r in existing_rows:
+            seq_id = str(r.get("sequence_id", "")).strip()
+            status = str(r.get("ai_status", "")).strip().lower()
+            # Skip rows already processed, including errors, unless overwrite is requested
+            if seq_id and status:
+                processed_ids.add(seq_id)
+
+    rows_to_process = [
+        r for r in rows
+        if str(r.get("sequence_id", "")).strip() not in processed_ids
+    ]
+
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required for practical Qwen2.5-VL-7B review in Colab.")
 
@@ -291,19 +318,20 @@ def main() -> None:
         torch_dtype=torch_dtype,
         device_map="auto",
     )
-    # Keep image token usage controlled for contact sheets.
     processor = AutoProcessor.from_pretrained(
         args.model_id,
         min_pixels=256 * 28 * 28,
         max_pixels=960 * 28 * 28,
     )
 
-    output_rows: list[dict[str, Any]] = []
+    output_rows: list[dict[str, Any]] = existing_rows.copy()
     errors = 0
     started = time.time()
 
-    for idx, row in enumerate(tqdm(rows, desc="Qwen auto-review", unit="seq"), start=1):
+    for row in tqdm(rows_to_process, desc="Qwen auto-review", unit="seq"):
         base = dict(row)
+        seq_id = str(base.get("sequence_id", "")).strip()
+
         try:
             result = review_one_row(model, processor, row, project_root=paths.project_root)
             base.update(result)
@@ -324,19 +352,27 @@ def main() -> None:
                     "ai_status": f"error: {type(e).__name__}: {e}",
                 }
             )
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         output_rows.append(base)
 
-        # Write incrementally so a Colab disconnect does not lose progress.
-        if idx % 5 == 0:
-            write_csv(output_rows, out_csv)
+        # Save after EVERY row so interrupted runs can resume safely
+        write_csv(output_rows, out_csv)
 
-    write_csv(output_rows, out_csv)
+        # Also mark as processed in-memory immediately
+        if seq_id:
+            processed_ids.add(seq_id)
 
     elapsed = time.time() - started
     print(f"profile        : {paths.profile_name}")
     print(f"review_sheet    : {review_sheet}")
     print(f"output_csv      : {out_csv}")
-    print(f"rows_processed  : {len(output_rows)}")
+    print(f"existing_rows   : {len(existing_rows)}")
+    print(f"rows_attempted  : {len(rows_to_process)}")
+    print(f"rows_total_out  : {len(output_rows)}")
     print(f"errors          : {errors}")
     print(f"elapsed_sec     : {elapsed:.1f}")
 
