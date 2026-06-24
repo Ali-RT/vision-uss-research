@@ -101,7 +101,9 @@ def build_prompt(row: dict[str, str]) -> str:
     scene = row.get("scene_tags", "")
 
     return f"""
-You are reviewing contact sheets for a computer-vision dataset curation pipeline.
+You are a strict visual dataset-quality reviewer for a computer-vision research pipeline.
+
+You are reviewing contact sheets for near-field obstacle understanding.
 
 Context:
 - preferred camera: {preferred_camera}
@@ -109,25 +111,56 @@ Context:
 - approach: {approach}
 - weather: {weather}
 - scene tags: {scene}
-- primary target object: {primary_object}
+- target object: {primary_object}
 
 Images:
-1. Chosen-camera contact sheet with 6 candidate ratios: 0.15, 0.30, 0.45, 0.60, 0.75, 0.90
-2. Top-view contact sheet with the same ratios
-3. Mid pair image for quick sanity check
+1. Chosen-camera contact sheet with 6 candidate ratios:
+   0.15, 0.30, 0.45, 0.60, 0.75, 0.90
+2. Top-view contact sheet with the same 6 candidate ratios
+3. Mid pair image for sanity check only
 
-Task:
-Pick the BEST candidate ratio where the target obstacle is most visible and best aligned with the top-view.
-Then score:
-- object_visible_score_0_3: 0,1,2,3
-- scene_clarity_score_0_3: 0,1,2,3
-- topview_useful_score_0_3: 0,1,2,3
+Your task:
+Choose exactly ONE best ratio. Do not default to the middle frame unless it is truly best.
 
-Scoring guide:
-- 0 = not useful
-- 1 = weak
+Evaluate the six ratios comparatively:
+- Which ratio shows the target object most clearly?
+- Which ratio has the least occlusion/blur?
+- Which ratio aligns best with the top-view context?
+- Which ratio would be most useful as a dataset example?
+
+Scoring:
+object_visible_score_0_3:
+- 0 = target object not visible or impossible to identify
+- 1 = weak visibility, tiny, ambiguous, or heavily occluded
+- 2 = usable but not ideal
+- 3 = clear target object, good dataset example
+
+scene_clarity_score_0_3:
+- 0 = unusable image
+- 1 = poor lighting/blur/occlusion
 - 2 = usable
-- 3 = clear
+- 3 = clear scene
+
+topview_useful_score_0_3:
+- 0 = top-view is not useful or inconsistent
+- 1 = weak top-view support
+- 2 = usable support
+- 3 = clearly supports the selected ratio
+
+candidate_quality:
+- good = object is clear, scene is clear, top-view supports the frame
+- good_enough = usable, but not ideal
+- borderline = uncertain, weak visibility, or weak top-view alignment
+- bad = not suitable for dataset curation
+
+keep_for_next_stage:
+- 1 only for good or good_enough
+- 0 for borderline or bad
+
+Important:
+Be selective. It is acceptable to output borderline or bad.
+Do not assign all scores as 2 unless the selected frame is genuinely only moderately usable.
+If no ratio clearly shows the target object, choose the least bad ratio and set keep_for_next_stage to 0.
 
 Return STRICT JSON only with exactly these keys:
 {{
@@ -138,15 +171,12 @@ Return STRICT JSON only with exactly these keys:
   "keep_for_next_stage": 0,
   "candidate_quality": "good|good_enough|borderline|bad",
   "confidence": "high|medium|low",
-  "reason": "one short sentence"
+  "ratio_comparison": "short comparison explaining why the selected ratio is better than nearby ratios",
+  "reason": "one short sentence explaining the decision"
 }}
 
-Rules:
-- keep_for_next_stage = 1 only if the candidate looks usable for dataset curation.
-- candidate_quality should reflect the selected best_ratio only.
-- Do not output markdown, bullets, or extra text.
+Do not output markdown, bullets, or any extra text.
 """.strip()
-
 
 def review_one_row(
     model: Qwen2_5_VLForConditionalGeneration,
@@ -225,6 +255,7 @@ def review_one_row(
         "ai_keep_for_next_stage": normalize_keep(parsed.get("keep_for_next_stage", "")),
         "ai_candidate_quality": str(parsed.get("candidate_quality", "")).strip(),
         "ai_confidence": str(parsed.get("confidence", "")).strip(),
+        "ai_ratio_comparison": str(parsed.get("ratio_comparison", "")).strip(),
         "ai_reason": str(parsed.get("reason", "")).strip(),
         "ai_raw_text": output_text.strip(),
     }
@@ -349,6 +380,7 @@ def main() -> None:
                     "ai_confidence": "",
                     "ai_reason": "",
                     "ai_raw_text": "",
+                    "ai_ratio_comparison": "",
                     "ai_status": f"error: {type(e).__name__}: {e}",
                 }
             )
