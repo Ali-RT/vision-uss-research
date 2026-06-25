@@ -37,17 +37,23 @@ def split_pipe_values(text: str) -> list[str]:
         return []
     return [x.strip() for x in str(text).split("|") if x.strip()]
 
-
 def primary_label_object(text: str) -> str:
     items = split_pipe_values(text)
-    if not items:
-        return "MISSING"
 
-    # items look like "bicyclestand" or "bicyclestand:1"
-    first = items[0]
-    if ":" in first:
-        first = first.split(":", 1)[0].strip()
-    return first or "MISSING"
+    cleaned: list[str] = []
+    for item in items:
+        name = item.split(":", 1)[0].strip()
+        if name:
+            cleaned.append(name)
+
+    for name in cleaned:
+        if name.lower() != "empty":
+            return name
+
+    if cleaned and cleaned[0].lower() == "empty":
+        return "empty_control"
+
+    return "unknown"
 
 
 def primary_weather(text: str) -> str:
@@ -56,6 +62,9 @@ def primary_weather(text: str) -> str:
 
 
 def make_sampling_row(row: dict[str, str]) -> dict[str, str]:
+    label_objects_json = row.get("label_objects_json", "")
+    target_object = primary_label_object(label_objects_json)
+
     return {
         "sequence_id": row.get("sequence_id", ""),
         "sequence_dir": row.get("sequence_dir", ""),
@@ -67,8 +76,9 @@ def make_sampling_row(row: dict[str, str]) -> dict[str, str]:
         "approach": row.get("approach", ""),
         "scene_tags": row.get("scene_tags", ""),
         "weather_tags": row.get("weather_tags", ""),
-        "label_objects_json": row.get("label_objects_json", ""),
-        "primary_label_object": primary_label_object(row.get("label_objects_json", "")),
+        "label_objects_json": label_objects_json,
+        "target_object": target_object,
+        "primary_label_object": target_object,
         "primary_weather": primary_weather(row.get("weather_tags", "")),
         "front_video": row.get("front_video", ""),
         "rear_video": row.get("rear_video", ""),
@@ -143,19 +153,19 @@ def build_samples(
 
     sampled_front = stratified_sample(
         front_rows,
-        group_keys=["weather_tags", "approach", "label_objects_json"],
+        group_keys=["weather_tags", "approach", "target_object"],
         target_n=n_front,
         seed=seed,
     )
     sampled_rear = stratified_sample(
         rear_rows,
-        group_keys=["weather_tags", "approach", "label_objects_json"],
+        group_keys=["weather_tags", "approach", "target_object"],
         target_n=n_rear,
         seed=seed + 1,
     )
     sampled_unknown = stratified_sample(
         unknown_rows,
-        group_keys=["weather_tags", "approach", "label_objects_json"],
+        group_keys=["weather_tags", "approach", "target_object"],
         target_n=n_unknown,
         seed=seed + 2,
     )
