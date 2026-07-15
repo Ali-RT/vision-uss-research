@@ -1,0 +1,59 @@
+# Mapping rules from Label V2 to benchmark categories.
+# Derived from the full inventory over 8217 folders / 18261 Label V2 rows (2026-07-14).
+# Source of truth: the per-row class column. The NAMEoFFILE taxonomy family is a
+# campaign descriptor used for stratification/QA, not per-row ground truth
+# (low-object sequences legitimately contain additional high objects, e.g. bush/pole/tree
+# rows inside F_lowObjectssmall sequences).
+
+class_mapping:
+  "0": traversable   # 8935 rows; includes surface objects: drain, gully, roughroad,
+                     # and overhead ceilingbeam(s) - present but drivable/under-passable
+  "1": low           # 2298 rows
+  "3": high          # 6867 rows
+  "2": exclude       # 'unknown' - occurs exactly once in the whole dataset
+  "5": exclude       # undocumented; 160 rows, all on 'empty' rows, multiple labelers,
+                     # co-occurring with stonemiddle(_side) sequences - do NOT use these
+                     # 'empty' rows as traversable negatives until meaning is clarified
+
+distance:
+  # 'important Distance [mm]' == 2000 for every row in the dataset: it is a labeling-spec
+  # threshold, NOT a measurement. Distance supervision must come from CusReplay
+  # MAP_ClassifierMonitorNormed ObjDist per cycle.
+  use_label_v2: false
+  source: cusreplay_objdist
+
+taxonomy_families:
+  C_highObjectslarge: high
+  D_highObjectsmedium: high
+  E_highObjectssmall: high
+  F_lowObjectssmall: low
+  # NAMEoFFILE present on ~59% of rows; family parse rate ~86% of those.
+  # H* categories (Gravel, Belgian_pavement) = surfaces, J* = vehicles, K* = walls.
+
+# Canonical object names: merge spelling/placement variants before class balancing.
+canonical_objects:
+  standardcube: [cubestandard, standardcube, Stardartcube]
+  ceilingbeam: [ceilingbeam, ceilingbeams]
+  dummychild: [dummychild, "Dummychild -Central", "Dummychild -Displaced"]
+  pole: [pole, "Pole - Central", "Pole - Displaced", pole75mm]
+  squarepole: [squarepole, "Square_pole - Central", "Square_pole - Displaced"]
+  car: [car, Car-45-Degree]
+  curbstone: [curbstone]
+  bush: [bush]
+
+# Suffix conventions to strip into a variant field instead of separate classes.
+variant_suffixes: ["_side", " -Central", " -Displaced", "-45-Degree"]
+
+# Multi-object scene names (JSON tags and Label V2 use different spellings).
+# Flag these sequences multi_object=true; do not treat the combined name as a class.
+multi_object_names:
+  - Multi_Obj_Curbstone_Bush
+  - Multi_Obj_Curbstone_High
+  - Multi_Obj_Low_Bush
+  - Multi_Obj_Terrain_Bush
+  - multiobj_bush_curbstone
+  - multiobj_bush_low
+  - multiobj_bush_terrain
+
+# Spec-parameter columns confirmed constant across the dataset (document and drop):
+constant_columns: ["Min exist Property", "newer than", "mpBufferAvailable"]

@@ -1,0 +1,30 @@
+object_name,aliases,height_cm_min,height_cm_max,height_bin,notes
+10cmbox,box10cm,10,10,low,staged test box
+15cmbox,box15cm,15,15,low,staged test box
+20cmbox,box20cm,20,20,low,staged test box
+25cmbox,box25cm,25,25,high,boundary case: policy is below 25 cm = low
+30cmbox,box30cm,30,30,high,staged test box
+35cmbox,box35cm,35,35,high,staged test box
+40cmbox,box40cm,40,40,high,staged test box
+45cmbox,box45cm,45,45,high,staged test box
+50cmbox,box50cm,50,50,high,staged test box
+55cmbox,box55cm,55,55,high,staged test box
+60cmbox,box60cm,60,60,high,staged test box
+child dummy,dummychild|dummy child|childdummy|dummychild -central|dummychild central|dummychild-central,125,125,high,pedestrian dummy; '-Central' variant = centrally placed
+curblow,curb low|low curb,4,9,low,curbstone low
+curbhigh,curb high|high curb,10,18,low,curbstone high (still below 25 cm)
+curbstone,curb|kerb|kerbstone,4,18,low,generic curb label (165 sequences); per-sequence height unknown - low per Label V2
+fence,,,,high,observed class high in Label V2; height not cataloged - verify
+barrier,ubarrier|u-barrier,,,high,observed class high in Label V2; height not cataloged - verify
+step,,,,low,single sequence; observed class low in Label V2; height not cataloged - verify
+car,vehicle,,,high,height not cataloged
+isopole,iso pole|pole,108,108,high,ISO test pole
+table (on side),table|tableonside|table on side,76,76,high,table lying on its side
+wall,,,,high,height not cataloged
+empty,none|no object,,,ignore,traversable / no obstacle present
+tire_stopper (radstopper),tire_stopper|radstopper|tire stopper|wheel stopper,,,low,typical wheel stopper ~10 cm; height estimated - verify
+bicyclestand,bicycle stand|bike stand,,,high,thin metal hoops; height estimated - verify
+stonelarge,stone large|large stone,,,high,observed class high in Label V2; height not cataloged - verify
+stonemiddle,stone middle|middle stone|stonemedium,,,high,observed class high in Label V2; height not cataloged - verify
+stonelarge_side,stone large side|stonelarge side,,,high,large stone lying on side; height not cataloged - verify
+stonemiddle_side,stone middle side|stonemiddle side,,,high,middle stone lying on side; height not cataloged - verify
