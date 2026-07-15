@@ -90,18 +90,24 @@ up in run.json.
 
 ## 5. Reset & redo (reproducibility pass)
 
-1. **Commit the current repo state first** (much of the work is untracked) - baseline tag.
-2. **Archive, don't delete, Drive artifacts**: move everything current to
-   `_archive_premigration/`. The clicks.json files are ~200 human clicks - they are
-   imported into the new structure, NOT redone.
-3. Implement the reorg (src modules -> notebook refactor -> new notebooks 05-07).
-4. Redo the chain under proper run IDs:
-   inventory v2 -> full batch labeling run -> click import + any re-clicks ->
-   QA gate -> dataset v1 -> train v1 -> eval v1.
+Status (2026-07-15): PR1 (`ce00ae6`), PR2 (`b93284e`), PR3 (`19b33bb`) landed on main.
+Decision: **clean redo, no artifact archive** - old Drive artifacts are deleted and the
+whole chain re-runs under run IDs (clicks are redone by hand; notebook 03's
+`IMPORT_CLICKS_JSON` remains available if an old clicks.json is kept).
+
+Redo runbook (Colab, after `git push`):
+1. Delete the old Drive artifact folders; run `scripts/bootstrap_colab.sh` (REPO_URL).
+2. **01 inventory**: SMOKE_TEST=True sanity pass, then False for the full scan.
+3. **02 batch labeling**: validation batch (`limit_per_object: 50`) -> QA in 04 ->
+   full run (`limit_per_object: 0`; ~10-15 GPU-h, resumable across disconnects).
+4. **03 click labeling**: click round (~170 items, ~30 min) -> propagation round.
+5. **04 QA gate** over both label runs; fix loop via 03 REDO_OBJECTS / 02 rerun.
+6. **05 dataset** -> **06 train** -> **07 eval** (gold-test metrics incl. low/high
+   accuracy).
 
 Implementation order (each independently mergeable):
-- **PR1**: `src/` shared modules + `runs.py` + `requirements/colab.txt` + configs/experiments skeletons.
-- **PR2**: regenerate notebooks 01-04 as thin drivers on src (notebook builders exist,
-  so this is mostly mechanical); move gate/depth notebooks to `exploratory/`.
-- **PR3**: 05 dataset merge/split + 06 training + 07 eval.
-- **PR4**: Drive migration helper (archive + click import) + full redo run.
+- **PR1**: `src/` shared modules + `runs.py` + `requirements/colab.txt` + configs/experiments skeletons. DONE
+- **PR2**: regenerate notebooks 01-04 as thin drivers on src; move gate/depth
+  notebooks to `exploratory/`. DONE
+- **PR3**: 05 dataset merge/split + 06 training + 07 eval. DONE
+- **PR4**: clean redo on Drive per the runbook above (no migration tooling needed).
