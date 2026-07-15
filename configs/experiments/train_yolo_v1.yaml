@@ -1,0 +1,14 @@
+# YOLO training run config (notebooks/06_train_yolo.ipynb)
+stage: train
+tag: yolo_v1
+
+dataset: dataset_v1        # dataset id under datasets/ on the artifacts drive
+model: yolo11s.pt
+epochs: 60
+imgsz: 960                 # native camera width; halve for quick experiments
+batch: 16
+seed: 0
+augment:
+  mosaic: 1.0              # counters the one-staged-object-per-scene bias
+  copy_paste: 0.3
+  fliplr: 0.5

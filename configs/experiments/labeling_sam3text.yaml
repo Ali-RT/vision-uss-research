@@ -1,0 +1,14 @@
+# Batch SAM3 text-prompt labeling run config (notebooks/02_batch_sam3_labeling.ipynb)
+stage: labels
+tag: sam3text_v1
+
+objects: [curbstone, speedbump, pole]
+limit_per_object: 0        # 0 = all; use 50 for a validation batch
+n_frames: 20
+ratio_range: [0.30, 0.85]  # mid-approach: at ~0.95 the target drops below the bumper FOV
+seed_ratio: 0.60
+score_threshold: 0.3
+corridor:
+  sigma: 0.25
+  min_cy: 0.35
+seed: 0

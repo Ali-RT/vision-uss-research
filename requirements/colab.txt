@@ -1,0 +1,9 @@
+# Colab environment for the labeling/training pipeline.
+# Colab already ships torch/torchvision/opencv/pandas - only pin what we add.
+# TODO: after the first verified full run, freeze exact versions here
+#   (pip freeze | grep -iE 'transformers|accelerate|ultralytics').
+transformers>=4.57
+accelerate>=1.0
+ultralytics>=8.3
+tqdm>=4.66
+pyyaml>=6.0

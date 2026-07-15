@@ -1,0 +1,24 @@
+# YOLO dataset build config (notebooks/05_build_yolo_dataset.ipynb)
+stage: dataset
+tag: v1
+
+# label runs to merge (run IDs under labels/ on the artifacts drive)
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true       # human-clicked: preferred for the test split
+
+class_ids:            # contiguous YOLO ids
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+
+split:
+  gold_test_frac: 0.20   # of clicked sequences per class -> gold test, never trained on
+  auto_test_frac: 0.10   # fallback for classes without clicked sequences
+  val_frac: 0.15
+seed: 0
