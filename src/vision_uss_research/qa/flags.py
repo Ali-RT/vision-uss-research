@@ -15,11 +15,23 @@ import pandas as pd
 class FlagThresholds:
     big_box_area: float = 0.45
     tiny_box_area_default: float = 0.0008
+    # small/thin classes are GENUINELY tiny in-frame (full-run medians: cone
+    # 0.0009, pole 0.0014, tree/bollard trunk-thin) - per-class floors
     tiny_box_area_by_class: dict = field(default_factory=lambda: {
-        "pole": 0.0003, "squarepole": 0.0003,
+        "pole": 0.0002, "squarepole": 0.0002,
         "woodenboard": 0.00015, "hose": 0.00015,
+        "cone": 0.0002, "tree": 0.0002, "bollard": 0.0002,
+        "car": 0.0003, "cubestandard": 0.0003,
     })
-    extreme_aspect: float = 12.0
+    # aspect is symmetric (max(w/h, h/w)); elongated classes exceed 12 by
+    # normal geometry: a head-on curb is ~900x40 px, a pole is 1:15 vertical
+    extreme_aspect_default: float = 12.0
+    extreme_aspect_by_class: dict = field(default_factory=lambda: {
+        "curbstone": 45.0, "curbstone_side": 45.0, "speedbump": 45.0,
+        "hose": 45.0, "woodenboard": 30.0, "ubarrier": 30.0,
+        "pole": 40.0, "squarepole": 40.0, "tree": 40.0, "bollard": 30.0,
+        "bicyclestand": 30.0,
+    })
     jump_iou: float = 0.10
 
 
@@ -56,8 +68,9 @@ def compute_flags(boxed: pd.DataFrame,
                 row["target_object"], thresholds.tiny_box_area_default)
             if row["mask_area_frac"] < tiny:
                 reasons.append("tiny_box")
-            if (row["aspect"] > thresholds.extreme_aspect
-                    or row["aspect"] < 1 / thresholds.extreme_aspect):
+            aspect_limit = thresholds.extreme_aspect_by_class.get(
+                row["target_object"], thresholds.extreme_aspect_default)
+            if max(row["aspect"], 1 / row["aspect"]) > aspect_limit:
                 reasons.append("extreme_aspect")
             if prev_box is not None and box_iou(prev_box, cur_box) < thresholds.jump_iou:
                 reasons.append("jump")

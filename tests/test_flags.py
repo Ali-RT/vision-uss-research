@@ -33,3 +33,34 @@ def test_flags_big_jump_and_per_class_tiny():
     assert "big_box" in by_seq["s2"]
     assert "jump" in by_seq["s3"]
     assert "tiny_box" in by_seq["s4"]
+
+
+def test_per_class_aspect_thresholds():
+    rows = [
+        # head-on curb: 900x40 px, aspect 22.5 - normal geometry, NOT flagged
+        _row("c1", "curbstone", 0, 30, 500, 930, 540, 0.06),
+        # vertical pole: 16x260 px, inverse aspect 16 - normal, NOT flagged
+        _row("p1", "pole", 0, 470, 200, 486, 460, 0.007),
+        # compact object with absurd aspect - flagged under the default limit
+        _row("d1", "dummychild", 0, 100, 300, 500, 320, 0.013),
+        # even a curb has limits: aspect ~90 -> flagged
+        _row("c2", "curbstone", 0, 15, 500, 915, 510, 0.015),
+    ]
+    flags = compute_flags(pd.DataFrame(rows), FlagThresholds())
+    flagged_seqs = set(flags["sequence_id"])
+    assert "c1" not in flagged_seqs
+    assert "p1" not in flagged_seqs
+    assert "d1" in flagged_seqs
+    assert "c2" in flagged_seqs
+
+
+def test_cone_tiny_threshold():
+    rows = [
+        # cone at median area 0.0009 - legit, NOT flagged (per-class 0.0002)
+        _row("k1", "cone", 0, 470, 380, 500, 410, 0.0009),
+        # collapsed cone mask - still flagged
+        _row("k2", "cone", 0, 480, 390, 484, 394, 0.00001),
+    ]
+    flags = compute_flags(pd.DataFrame(rows), FlagThresholds())
+    flagged = set(flags["sequence_id"])
+    assert "k1" not in flagged and "k2" in flagged
