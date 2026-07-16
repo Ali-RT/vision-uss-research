@@ -1,5 +1,11 @@
 # Low-Object Detection Plan (SAM3 Pseudo-Labels -> YOLO -> USS Fusion)
 
+> **2026-07-16:** the v1 closed-set scope below is superseded by the open-set
+> v2 approach and paper framing in `v2_open_set_approach.md` (8 training
+> classes incl. Low/High Unknown buckets, leave-object-out evaluation,
+> geometric height from camera-USS fusion). This document remains the record
+> of the v1 groundwork (gate results, taxonomy findings, phase history).
+
 ## Idea
 
 Train a real-time camera detector (YOLO) that detects near-field obstacles and
