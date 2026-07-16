@@ -91,3 +91,27 @@ def test_write_yolo_dataset(label_world, tmp_path):
     recorded = json.loads((out / "provenance.json").read_text())
     assert recorded["gold_test_sequences"]
     assert all(s.startswith("clicks_") for s in recorded["gold_test_sequences"])
+
+
+def test_tiny_class_never_loses_train(tmp_path):
+    """A class with only 2 sequences must end up test+train, never test+val."""
+    frames_root = tmp_path / "clicks" / "frames"
+    boxes_csv = tmp_path / "clicks" / "boxes.csv"
+    rows = []
+    for s in range(2):
+        seq = f"tiny_seq{s}"
+        rel = f"{seq}/rear/00000.jpg"
+        img = frames_root / rel
+        img.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(img), np.zeros((64, 96, 3), np.uint8))
+        rows.append(dict(sequence_id=seq, target_object="bicyclestand",
+                         camera="rear", frame_idx=0, frame_path=rel,
+                         x0=10, y0=20, x1=40, y1=50, mask_area_frac=0.02))
+    append_boxes(boxes_csv, rows)
+    merged = merge_label_sources([{"name": "clicks", "boxes_csv": boxes_csv,
+                                   "frames_root": frames_root, "gold": True}])
+    split = split_by_sequence(merged, seed=0)
+    by_split = split.groupby("split")["sequence_id"].nunique().to_dict()
+    assert by_split.get("test") == 1
+    assert by_split.get("train") == 1
+    assert "val" not in by_split

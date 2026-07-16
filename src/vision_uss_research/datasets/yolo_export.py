@@ -61,8 +61,13 @@ def split_by_sequence(df: pd.DataFrame, seed: int = 0,
             test = set(rng.sample(auto_seqs, n_test))
 
         remaining = sorted(set(gold_seqs + auto_seqs) - test)
-        n_val = max(1, round(val_frac * len(remaining))) if remaining else 0
-        val = set(rng.sample(remaining, min(n_val, len(remaining))))
+        # never sacrifice train for val: a class needs >=2 remaining sequences
+        # before any go to val (tiny classes get test + train only)
+        if len(remaining) >= 2:
+            n_val = max(1, round(val_frac * len(remaining)))
+            val = set(rng.sample(remaining, min(n_val, len(remaining) - 1)))
+        else:
+            val = set()
 
         for seq in test:
             split_of[seq] = "test"
