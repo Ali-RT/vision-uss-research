@@ -1,0 +1,47 @@
+# V2 dataset: 6 named classes + open-set buckets (notebooks/05, set
+# CONFIG_NAME = "dataset_v2"). Inference mapping: named class -> "Low"/"High"
+# with type; bucket class -> "Low Unknown"/"High Unknown".
+stage: dataset
+tag: v2
+
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true
+
+# objects mapped into buckets (everything not listed keeps its own class)
+class_groups:
+  hose: low_other
+  step: low_other
+  cone: high_other
+  bollard: high_other
+  car: high_other
+  tree: high_other
+  bush: high_other
+  stonelarge: high_other
+  stonemiddle: high_other
+  cubestandard: high_other
+  ubarrier: high_other
+  fence: high_other
+
+class_ids:
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+  low_other: 6
+  high_other: 7
+
+# open-set experiment: these objects are excluded from train/val entirely
+# (all their sequences forced to test), measuring generalization of the
+# bucket classes to NEVER-SEEN object types. [] disables.
+holdout_objects: [cone]
+
+split:
+  gold_test_frac: 0.20
+  auto_test_frac: 0.10
+  val_frac: 0.15
+seed: 0

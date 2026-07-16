@@ -1,0 +1,18 @@
+# Batch SAM3 labeling for the v2 "other" bucket classes (notebooks/02, set
+# CONFIG_NAME = "labeling_sam3text_v2extra"). Run AFTER the v1 run finishes;
+# the shared frame cache and resume logic make this purely additive.
+stage: labels
+tag: sam3text_v2extra
+
+# low bucket members: hose, step | high bucket members: the rest
+objects: [hose, step, cone, bollard, car, tree, bush,
+          stonelarge, stonemiddle, cubestandard, ubarrier, fence]
+limit_per_object: 0
+n_frames: 20
+ratio_range: [0.30, 0.85]
+seed_ratio: 0.60
+score_threshold: 0.3
+corridor:
+  sigma: 0.25
+  min_cy: 0.35
+seed: 0

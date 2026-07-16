@@ -115,3 +115,39 @@ def test_tiny_class_never_loses_train(tmp_path):
     assert by_split.get("test") == 1
     assert by_split.get("train") == 1
     assert "val" not in by_split
+
+
+def test_class_groups_and_open_set_holdout(label_world):
+    from vision_uss_research.datasets.yolo_export import (apply_class_groups,
+                                                          force_test_for_objects)
+    merged = merge_label_sources(label_world["sources"])
+    # bucket curbstone into low_other; woodenboard stays named
+    grouped = apply_class_groups(merged, {"curbstone": "low_other"})
+    assert set(grouped["class_name"]) == {"low_other", "woodenboard"}
+    # no grouping -> identity
+    identity = apply_class_groups(merged, None)
+    assert (identity["class_name"] == identity["target_object"]).all()
+
+    split = split_by_sequence(grouped, seed=0)
+    held = force_test_for_objects(split, ["curbstone"])
+    assert (held[held["target_object"] == "curbstone"]["split"] == "test").all()
+    # untouched class keeps its original split assignment
+    pd.testing.assert_series_equal(
+        held[held["target_object"] == "woodenboard"]["split"],
+        split[split["target_object"] == "woodenboard"]["split"])
+
+
+def test_write_dataset_uses_grouped_class_ids(label_world, tmp_path):
+    from vision_uss_research.datasets.yolo_export import apply_class_groups
+    merged = apply_class_groups(merge_label_sources(label_world["sources"]),
+                                {"curbstone": "low_other"})
+    split = split_by_sequence(merged, seed=0)
+    out = tmp_path / "ds"
+    provenance = write_yolo_dataset(split, out, {"low_other": 0, "woodenboard": 1},
+                                    label_world["frames_roots"], seed=0)
+    assert not provenance["missing_frames"]
+    labels = [p.read_text().split()[0]
+              for p in (out / "labels").rglob("*.txt")]
+    assert set(labels) == {"0", "1"}
+    names = json.loads((out / "dataset.yaml").read_text().splitlines()[-1].split("names: ")[1])
+    assert names == ["low_other", "woodenboard"]

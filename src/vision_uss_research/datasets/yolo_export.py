@@ -36,6 +36,31 @@ def merge_label_sources(sources: list[dict]) -> pd.DataFrame:
     return merged[merged["x0"].notna()].reset_index(drop=True)
 
 
+def apply_class_groups(df: pd.DataFrame, class_groups: dict[str, str] | None
+                       ) -> pd.DataFrame:
+    """Add a 'class_name' column: the training class for each row. Objects named
+    in class_groups map to their bucket (e.g. cone -> high_other); everything
+    else keeps its own name. Splitting still stratifies by target_object, so
+    bucket diversity is preserved across splits."""
+    out = df.copy()
+    groups = class_groups or {}
+    out["class_name"] = out["target_object"].map(lambda o: groups.get(o, o))
+    return out
+
+
+def force_test_for_objects(split_df: pd.DataFrame,
+                           holdout_objects: list[str]) -> pd.DataFrame:
+    """Open-set holdout: every sequence of these objects goes to the TEST split
+    (never trained on), so notebook 07 measures generalization to object types
+    the model has never seen."""
+    if not holdout_objects:
+        return split_df
+    out = split_df.copy()
+    mask = out["target_object"].isin(holdout_objects)
+    out.loc[mask, "split"] = "test"
+    return out
+
+
 def split_by_sequence(df: pd.DataFrame, seed: int = 0,
                       gold_test_frac: float = 0.20,
                       auto_test_frac: float = 0.10,
@@ -88,7 +113,9 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
     class_ids: target_object -> contiguous YOLO class id. frames_roots: source
     name -> frames root for resolving stored frame paths. Returns a summary."""
     out_dir = Path(out_dir)
-    unknown = sorted(set(df["target_object"]) - set(class_ids))
+    # training class: bucketed 'class_name' when apply_class_groups ran, else raw object
+    name_col = "class_name" if "class_name" in df.columns else "target_object"
+    unknown = sorted(set(df[name_col]) - set(class_ids))
     if unknown:
         raise ValueError(f"no class id for objects: {unknown}")
 
@@ -123,14 +150,14 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
 
         lines = []
         for _, row in grp.iterrows():
-            cls = class_ids[row["target_object"]]
+            cls = class_ids[row[name_col]]
             cx = (row["x0"] + row["x1"]) / 2 / w
             cy = (row["y0"] + row["y1"]) / 2 / h
             bw = (row["x1"] - row["x0"]) / w
             bh = (row["y1"] - row["y0"]) / h
             lines.append(f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
         (lbl_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n")
-        counts[(split, grp.iloc[0]["target_object"])] += 1
+        counts[(split, grp.iloc[0][name_col])] += 1
 
     names = [obj for obj, _ in sorted(class_ids.items(), key=lambda kv: kv[1])]
     dataset_yaml = (
