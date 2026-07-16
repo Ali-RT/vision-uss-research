@@ -25,14 +25,19 @@ from vision_uss_research.runs import git_sha
 
 def merge_label_sources(sources: list[dict]) -> pd.DataFrame:
     """sources: [{'name', 'boxes_csv', 'frames_root', 'gold': bool}, ...].
-    Returns the concatenated canonical rows with 'source' and 'gold' columns."""
+    Returns the concatenated canonical rows with 'source' and 'gold' columns.
+    When the same sequence/camera/frame appears in multiple sources (e.g. a
+    sequence re-labeled in a newer run), the source that sorts LAST by name
+    wins - run ids are date-prefixed, so newer runs override older ones."""
     parts = []
-    for source in sources:
+    for source in sorted(sources, key=lambda s: str(s["name"])):
         df = load_boxes_tolerant(Path(source["boxes_csv"]))
         df["source"] = source["name"]
         df["gold"] = bool(source.get("gold", False))
         parts.append(df)
     merged = pd.concat(parts, ignore_index=True)
+    merged = merged.drop_duplicates(subset=["sequence_id", "camera", "frame_idx"],
+                                    keep="last")
     return merged[merged["x0"].notna()].reset_index(drop=True)
 
 

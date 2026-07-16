@@ -151,3 +151,27 @@ def test_write_dataset_uses_grouped_class_ids(label_world, tmp_path):
     assert set(labels) == {"0", "1"}
     names = json.loads((out / "dataset.yaml").read_text().splitlines()[-1].split("names: ")[1])
     assert names == ["low_other", "woodenboard"]
+
+
+def test_merge_dedupes_overlapping_sources_newest_wins(tmp_path):
+    """The same frame labeled by two runs keeps only the newer run's row."""
+    frames_root = tmp_path / "frames"
+    rel = "seqX/rear/00000.jpg"
+    img = frames_root / rel
+    img.parent.mkdir(parents=True)
+    cv2.imwrite(str(img), np.zeros((64, 96, 3), np.uint8))
+
+    sources = []
+    for run_name, x0 in [("20260716_labels_old", 10), ("20260717_labels_new", 50)]:
+        csv_path = tmp_path / run_name / "boxes.csv"
+        append_boxes(csv_path, [dict(sequence_id="seqX", target_object="curbstone",
+                                     camera="rear", frame_idx=0, frame_path=rel,
+                                     x0=x0, y0=20, x1=x0 + 30, y1=50,
+                                     mask_area_frac=0.02)])
+        sources.append({"name": run_name, "boxes_csv": csv_path,
+                        "frames_root": frames_root, "gold": False})
+
+    merged = merge_label_sources(sources)
+    assert len(merged) == 1
+    assert merged.iloc[0]["x0"] == 50
+    assert merged.iloc[0]["source"] == "20260717_labels_new"

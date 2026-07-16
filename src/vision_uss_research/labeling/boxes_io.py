@@ -45,6 +45,7 @@ def resolve_frame_path(row, frames_root: Path) -> Path | None:
 def append_boxes(path: Path, rows: list[dict]) -> None:
     """Append rows in the canonical schema (header written once)."""
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
     with path.open("a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=BOX_COLS)
