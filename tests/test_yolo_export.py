@@ -222,3 +222,34 @@ def test_write_dataset_size_cache_per_sequence(tmp_path):
     tall = (out / "labels" / "train" / "tall_seq_rear_00000.txt").read_text().split()
     assert abs(float(wide[3]) - 32 / 96) < 1e-4   # bw normalized by w=96
     assert abs(float(tall[3]) - 32 / 64) < 1e-4   # bw normalized by w=64
+
+
+def test_write_dataset_survives_persistent_io_failure(label_world, tmp_path, monkeypatch):
+    """A path that keeps failing lands in missing_frames; the run completes."""
+    import vision_uss_research.datasets.yolo_export as ye
+    monkeypatch.setattr(ye, "IO_WAIT_S", 0.0)
+
+    merged = merge_label_sources(label_world["sources"])
+    split = split_by_sequence(merged, seed=0)
+    out = tmp_path / "ds"
+    class_ids = {"curbstone": 0, "woodenboard": 1}
+
+    real_copy = ye.shutil.copyfile
+    fail_stem = sorted(split["sequence_id"].unique())[0]
+
+    def flaky_copy(src, dst):
+        if fail_stem in str(dst):
+            raise OSError(5, "Input/output error")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(ye.shutil, "copyfile", flaky_copy)
+    provenance = write_yolo_dataset(split, out, class_ids,
+                                    label_world["frames_roots"], progress=False)
+    assert provenance["missing_frames"], "failing frames should be recorded"
+    assert provenance["images_written"] > 0, "other frames still written"
+    # a later run with healthy I/O picks the failed frames back up
+    monkeypatch.setattr(ye.shutil, "copyfile", real_copy)
+    retry = write_yolo_dataset(split, out, class_ids,
+                               label_world["frames_roots"], progress=False)
+    assert not retry["missing_frames"]
+    assert retry["images_written"] == len(provenance["missing_frames"])

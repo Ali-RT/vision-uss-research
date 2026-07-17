@@ -111,16 +111,22 @@ def split_by_sequence(df: pd.DataFrame, seed: int = 0,
     return out
 
 
-def _with_io_retry(fn, retries: int = 2, wait_s: float = 2.0):
+# Drive FUSE throws transient Errno 5 under bursts of small writes; retried with
+# exponential backoff. Module-level so tests can zero the wait.
+IO_RETRIES = 3
+IO_WAIT_S = 2.0
+
+
+def _with_io_retry(fn):
     """Retry transient Drive FUSE OSErrors instead of losing a long write run."""
     import time
-    for attempt in range(retries + 1):
+    for attempt in range(IO_RETRIES + 1):
         try:
             return fn()
         except OSError:
-            if attempt == retries:
+            if attempt == IO_RETRIES:
                 raise
-            time.sleep(wait_s)
+            time.sleep(IO_WAIT_S * (2 ** attempt))
 
 
 def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int],
@@ -160,7 +166,12 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
         lbl_path = lbl_dir / f"{stem}.txt"
 
         # resume: both artifacts already written by a previous run -> skip cheaply
-        if dst_img.exists() and lbl_path.exists():
+        try:
+            already_done = _with_io_retry(
+                lambda: dst_img.exists() and lbl_path.exists())
+        except OSError:
+            already_done = False
+        if already_done:
             n_skipped_existing += 1
             counts[(split, grp.iloc[0][name_col])] += 1
             continue
@@ -179,18 +190,6 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
             size_cache[size_key] = img.shape[:2]
         h, w = size_cache[size_key]
 
-        img_dir.mkdir(parents=True, exist_ok=True)
-        lbl_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            if not dst_img.exists():
-                if copy_images:
-                    _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
-                else:
-                    dst_img.symlink_to(src_path.resolve())
-        except OSError:
-            missing_frames.append(str(src_path))
-            continue
-
         lines = []
         for _, row in grp.iterrows():
             cls = class_ids[row[name_col]]
@@ -199,7 +198,23 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
             bw = (row["x1"] - row["x0"]) / w
             bh = (row["y1"] - row["y0"]) / h
             lines.append(f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-        lbl_path.write_text("\n".join(lines) + "\n")
+        label_text = "\n".join(lines) + "\n"
+
+        # every filesystem touch is retried; a frame that still fails is
+        # recorded and skipped - one flaky path must never kill the run
+        try:
+            _with_io_retry(lambda: img_dir.mkdir(parents=True, exist_ok=True))
+            _with_io_retry(lambda: lbl_dir.mkdir(parents=True, exist_ok=True))
+            if not dst_img.exists():
+                if copy_images:
+                    _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
+                else:
+                    dst_img.symlink_to(src_path.resolve())
+            _with_io_retry(lambda: lbl_path.write_text(label_text))
+        except OSError:
+            missing_frames.append(str(src_path))
+            continue
+
         n_written += 1
         counts[(split, grp.iloc[0][name_col])] += 1
 
