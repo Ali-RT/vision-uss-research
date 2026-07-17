@@ -253,3 +253,19 @@ def test_write_dataset_survives_persistent_io_failure(label_world, tmp_path, mon
                                label_world["frames_roots"], progress=False)
     assert not retry["missing_frames"]
     assert retry["images_written"] == len(provenance["missing_frames"])
+
+
+def test_progress_heartbeat_written(label_world, tmp_path):
+    merged = merge_label_sources(label_world["sources"])
+    split = split_by_sequence(merged, seed=0)
+    out = tmp_path / "ds"
+    progress_file = out / "progress.json"
+    out.mkdir()
+    write_yolo_dataset(split, out, {"curbstone": 0, "woodenboard": 1},
+                       label_world["frames_roots"], progress=False,
+                       progress_file=progress_file, progress_every=5)
+    prog = json.loads(progress_file.read_text())
+    assert prog["status"] == "completed"
+    assert prog["done"] == prog["total"] > 0
+    assert prog["written"] == prog["total"]
+    assert prog["missing"] == 0

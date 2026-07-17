@@ -131,7 +131,9 @@ def _with_io_retry(fn):
 
 def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int],
                        frames_roots: dict[str, Path], seed: int = 0,
-                       copy_images: bool = True, progress: bool = True) -> dict:
+                       copy_images: bool = True, progress: bool = True,
+                       progress_file: Path | None = None,
+                       progress_every: int = 200) -> dict:
     """Write images/{split}/, labels/{split}/, dataset.yaml and provenance.json.
     class_ids: target_object -> contiguous YOLO class id. frames_roots: source
     name -> frames root for resolving stored frame paths. Returns a summary."""
@@ -154,11 +156,44 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
     # group per frame so multiple boxes on one image land in one label file
     group_cols = ["split", "sequence_id", "camera", "frame_idx", "source"]
     groups = list(df.groupby(group_cols))
+    n_total = len(groups)
     if progress:
         from tqdm.auto import tqdm
         groups = tqdm(groups, desc="Writing dataset", unit="img")
 
+    import time as _time
+    started = _time.time()
+
+    def checkpoint_progress(final: bool = False) -> None:
+        """Heartbeat on disk so progress survives runtime disconnects.
+        Best-effort: a failed heartbeat write must never affect the build."""
+        if progress_file is None:
+            return
+        done = n_written + n_skipped_existing + len(missing_frames)
+        elapsed = max(_time.time() - started, 1e-6)
+        rate = n_written / elapsed
+        remaining = n_total - done
+        record = {
+            "total": n_total, "done": done,
+            "written": n_written, "skipped_existing": n_skipped_existing,
+            "missing": len(missing_frames),
+            "pct": round(100 * done / max(n_total, 1), 1),
+            "write_rate_per_s": round(rate, 1),
+            "eta_min": round(remaining / max(rate, 1e-6) / 60, 1) if not final else 0,
+            "updated": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "status": "completed" if final else "running",
+        }
+        try:
+            Path(progress_file).write_text(json.dumps(record, indent=1))
+        except OSError:
+            pass
+
+    n_since_checkpoint = 0
     for (split, seq_id, camera, frame_idx, source), grp in groups:
+        n_since_checkpoint += 1
+        if n_since_checkpoint >= progress_every:
+            checkpoint_progress()
+            n_since_checkpoint = 0
         stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
         img_dir = out_dir / "images" / split
         lbl_dir = out_dir / "labels" / split
@@ -217,6 +252,8 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
 
         n_written += 1
         counts[(split, grp.iloc[0][name_col])] += 1
+
+    checkpoint_progress(final=True)
 
     names = [obj for obj, _ in sorted(class_ids.items(), key=lambda kv: kv[1])]
     dataset_yaml = (
