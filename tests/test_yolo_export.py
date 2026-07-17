@@ -175,3 +175,50 @@ def test_merge_dedupes_overlapping_sources_newest_wins(tmp_path):
     assert len(merged) == 1
     assert merged.iloc[0]["x0"] == 50
     assert merged.iloc[0]["source"] == "20260717_labels_new"
+
+
+def test_write_dataset_resumes_without_rereading(label_world, tmp_path):
+    """Second run over the same out_dir skips every already-written frame."""
+    merged = merge_label_sources(label_world["sources"])
+    split = split_by_sequence(merged, seed=0)
+    out = tmp_path / "ds"
+    class_ids = {"curbstone": 0, "woodenboard": 1}
+
+    first = write_yolo_dataset(split, out, class_ids,
+                               label_world["frames_roots"], progress=False)
+    assert first["images_written"] > 0
+    assert first["images_skipped_existing"] == 0
+
+    second = write_yolo_dataset(split, out, class_ids,
+                                label_world["frames_roots"], progress=False)
+    assert second["images_written"] == 0
+    assert second["images_skipped_existing"] == first["images_written"]
+    # per-class counts identical across the resume
+    assert second["frames_per_split_class"] == first["frames_per_split_class"]
+
+
+def test_write_dataset_size_cache_per_sequence(tmp_path):
+    """Label normalization uses each sequence's own frame dimensions."""
+    frames_root = tmp_path / "frames"
+    rows = []
+    for seq, (w, h) in [("wide_seq", (96, 64)), ("tall_seq", (64, 96))]:
+        rel = f"{seq}/rear/00000.jpg"
+        img = frames_root / rel
+        img.parent.mkdir(parents=True)
+        cv2.imwrite(str(img), np.zeros((h, w, 3), np.uint8))
+        rows.append(dict(sequence_id=seq, target_object="curbstone", camera="rear",
+                         frame_idx=0, frame_path=rel, x0=0, y0=0, x1=32, y1=32,
+                         mask_area_frac=0.1))
+    csv_path = tmp_path / "boxes.csv"
+    append_boxes(csv_path, rows)
+    merged = merge_label_sources([{"name": "s", "boxes_csv": csv_path,
+                                   "frames_root": frames_root, "gold": False}])
+    merged["split"] = "train"
+    merged["gold"] = False
+    out = tmp_path / "ds"
+    write_yolo_dataset(merged, out, {"curbstone": 0}, {"s": frames_root},
+                       progress=False)
+    wide = (out / "labels" / "train" / "wide_seq_rear_00000.txt").read_text().split()
+    tall = (out / "labels" / "train" / "tall_seq_rear_00000.txt").read_text().split()
+    assert abs(float(wide[3]) - 32 / 96) < 1e-4   # bw normalized by w=96
+    assert abs(float(tall[3]) - 32 / 64) < 1e-4   # bw normalized by w=64

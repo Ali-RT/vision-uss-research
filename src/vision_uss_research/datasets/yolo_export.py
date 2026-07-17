@@ -111,9 +111,21 @@ def split_by_sequence(df: pd.DataFrame, seed: int = 0,
     return out
 
 
+def _with_io_retry(fn, retries: int = 2, wait_s: float = 2.0):
+    """Retry transient Drive FUSE OSErrors instead of losing a long write run."""
+    import time
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except OSError:
+            if attempt == retries:
+                raise
+            time.sleep(wait_s)
+
+
 def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int],
                        frames_roots: dict[str, Path], seed: int = 0,
-                       copy_images: bool = True) -> dict:
+                       copy_images: bool = True, progress: bool = True) -> dict:
     """Write images/{split}/, labels/{split}/, dataset.yaml and provenance.json.
     class_ids: target_object -> contiguous YOLO class id. frames_roots: source
     name -> frames root for resolving stored frame paths. Returns a summary."""
@@ -124,34 +136,60 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
     if unknown:
         raise ValueError(f"no class id for objects: {unknown}")
 
+    import cv2
+
     counts: dict = defaultdict(int)
     missing_frames: list[str] = []
+    n_written = 0
+    n_skipped_existing = 0
+    # dimensions are constant within one camera video: decode once, reuse
+    size_cache: dict[tuple, tuple[int, int]] = {}
+
     # group per frame so multiple boxes on one image land in one label file
     group_cols = ["split", "sequence_id", "camera", "frame_idx", "source"]
-    for (split, seq_id, camera, frame_idx, source), grp in df.groupby(group_cols):
+    groups = list(df.groupby(group_cols))
+    if progress:
+        from tqdm.auto import tqdm
+        groups = tqdm(groups, desc="Writing dataset", unit="img")
+
+    for (split, seq_id, camera, frame_idx, source), grp in groups:
+        stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
+        img_dir = out_dir / "images" / split
+        lbl_dir = out_dir / "labels" / split
+        dst_img = img_dir / f"{stem}.jpg"
+        lbl_path = lbl_dir / f"{stem}.txt"
+
+        # resume: both artifacts already written by a previous run -> skip cheaply
+        if dst_img.exists() and lbl_path.exists():
+            n_skipped_existing += 1
+            counts[(split, grp.iloc[0][name_col])] += 1
+            continue
+
         src_path = resolve_frame_path(grp.iloc[0], frames_roots[source])
         if src_path is None:
             missing_frames.append(str(grp.iloc[0]["frame_path"]))
             continue
-        import cv2
-        img = cv2.imread(str(src_path))
-        if img is None:
-            missing_frames.append(str(src_path))
-            continue
-        h, w = img.shape[:2]
 
-        stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
-        img_dir = out_dir / "images" / split
-        lbl_dir = out_dir / "labels" / split
+        size_key = (source, seq_id, camera)
+        if size_key not in size_cache:
+            img = cv2.imread(str(src_path))
+            if img is None:
+                missing_frames.append(str(src_path))
+                continue
+            size_cache[size_key] = img.shape[:2]
+        h, w = size_cache[size_key]
+
         img_dir.mkdir(parents=True, exist_ok=True)
         lbl_dir.mkdir(parents=True, exist_ok=True)
-
-        dst_img = img_dir / f"{stem}.jpg"
-        if not dst_img.exists():
-            if copy_images:
-                shutil.copyfile(src_path, dst_img)
-            else:
-                dst_img.symlink_to(src_path.resolve())
+        try:
+            if not dst_img.exists():
+                if copy_images:
+                    _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
+                else:
+                    dst_img.symlink_to(src_path.resolve())
+        except OSError:
+            missing_frames.append(str(src_path))
+            continue
 
         lines = []
         for _, row in grp.iterrows():
@@ -161,7 +199,8 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
             bw = (row["x1"] - row["x0"]) / w
             bh = (row["y1"] - row["y0"]) / h
             lines.append(f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-        (lbl_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n")
+        lbl_path.write_text("\n".join(lines) + "\n")
+        n_written += 1
         counts[(split, grp.iloc[0][name_col])] += 1
 
     names = [obj for obj, _ in sorted(class_ids.items(), key=lambda kv: kv[1])]
@@ -184,6 +223,8 @@ def write_yolo_dataset(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int
         "frames_per_split_class": {f"{s}/{o}": n for (s, o), n in sorted(counts.items())},
         "gold_test_sequences": sorted(
             df[(df["split"] == "test") & df["gold"]]["sequence_id"].unique().tolist()),
+        "images_written": n_written,
+        "images_skipped_existing": n_skipped_existing,
         "missing_frames": missing_frames,
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=1))
