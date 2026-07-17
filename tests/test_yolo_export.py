@@ -269,3 +269,51 @@ def test_progress_heartbeat_written(label_world, tmp_path):
     assert prog["done"] == prog["total"] > 0
     assert prog["written"] == prog["total"]
     assert prog["missing"] == 0
+
+
+def test_manifest_and_materialize_roundtrip(label_world, tmp_path):
+    from vision_uss_research.datasets.yolo_export import (materialize_yolo_dataset,
+                                                          write_dataset_manifest)
+    merged = merge_label_sources(label_world["sources"])
+    split = split_by_sequence(merged, seed=0)
+    drive_dir = tmp_path / "drive_run"
+    class_ids = {"curbstone": 0, "woodenboard": 1}
+
+    prov = write_dataset_manifest(split, drive_dir, class_ids,
+                                  label_world["frames_roots"], seed=0)
+    # Drive side holds only small files - no images
+    assert (drive_dir / "dataset_manifest.csv").exists()
+    assert not list(drive_dir.rglob("*.jpg"))
+    assert prov["class_names"] == ["curbstone", "woodenboard"]
+    assert prov["gold_test_sequences"]
+
+    local = tmp_path / "local_ds"
+    heartbeat = drive_dir / "progress.json"
+    result = materialize_yolo_dataset(
+        drive_dir / "dataset_manifest.csv",
+        {k: Path(v) for k, v in prov["frames_roots"].items()},
+        local, class_names=prov["class_names"], progress=False,
+        heartbeat_file=heartbeat, progress_every=5)
+    assert result["images_written"] > 0 and not result["missing_frames"]
+    # sharded per sequence, labels mirror images
+    imgs = sorted(p.relative_to(local / "images") for p in local.rglob("*.jpg"))
+    lbls = sorted(p.relative_to(local / "labels").with_suffix(".jpg")
+                  for p in (local / "labels").rglob("*.txt"))
+    assert imgs and imgs == lbls
+    assert all(len(p.parts) == 3 for p in imgs)  # split/sequence_id/stem.jpg
+    # labels normalized against real image size (96x64, box 10,20-40,50)
+    any_lbl = next((local / "labels").rglob("*.txt")).read_text().split()
+    assert abs(float(any_lbl[3]) - 30 / 96) < 1e-4
+    # heartbeat completed
+    prog = json.loads(heartbeat.read_text())
+    assert prog["status"] == "completed" and prog["done"] == prog["total"]
+    # dataset.yaml points at the local dir
+    assert str(local.resolve()) in (local / "dataset.yaml").read_text()
+
+    # resume: second materialization writes nothing
+    again = materialize_yolo_dataset(
+        drive_dir / "dataset_manifest.csv",
+        {k: Path(v) for k, v in prov["frames_roots"].items()},
+        local, class_names=prov["class_names"], progress=False)
+    assert again["images_written"] == 0
+    assert again["images_skipped_existing"] == result["images_written"]

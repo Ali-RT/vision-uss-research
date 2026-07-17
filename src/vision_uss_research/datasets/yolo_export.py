@@ -111,6 +111,161 @@ def split_by_sequence(df: pd.DataFrame, seed: int = 0,
     return out
 
 
+def write_dataset_manifest(df: pd.DataFrame, out_dir: Path, class_ids: dict[str, int],
+                           frames_roots: dict[str, Path], seed: int = 0) -> dict:
+    """Write the dataset as a MANIFEST on Drive: dataset_manifest.csv (one row
+    per box, pixel coords, class id) + provenance.json. No images are copied -
+    Google Drive folders degrade past ~10k items, so image materialization
+    happens on the training VM's local disk (materialize_yolo_dataset,
+    called by notebook 06)."""
+    out_dir = Path(out_dir)
+    name_col = "class_name" if "class_name" in df.columns else "target_object"
+    unknown = sorted(set(df[name_col]) - set(class_ids))
+    if unknown:
+        raise ValueError(f"no class id for objects: {unknown}")
+
+    manifest = df[["split", "sequence_id", "camera", "frame_idx", "source",
+                   "frame_path", "x0", "y0", "x1", "y1"]].copy()
+    manifest["class_id"] = df[name_col].map(class_ids)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest.to_csv(out_dir / "dataset_manifest.csv", index=False)
+
+    names = [obj for obj, _ in sorted(class_ids.items(), key=lambda kv: kv[1])]
+    frames = (df.drop_duplicates(["split", "sequence_id", "camera", "frame_idx"])
+              .groupby("split").size().to_dict())
+    provenance = {
+        "git_sha": git_sha(),
+        "seed": seed,
+        "class_ids": class_ids,
+        "class_names": names,
+        "sources": sorted(df["source"].unique().tolist()),
+        "frames_roots": {k: str(v) for k, v in frames_roots.items()},
+        "sequences_per_split": df.groupby("split")["sequence_id"].nunique().to_dict(),
+        "frames_per_split": frames,
+        "boxes_per_split_class": {
+            f"{s}/{o}": int(n) for (s, o), n in
+            df.groupby(["split", name_col]).size().items()},
+        "gold_test_sequences": sorted(
+            df[(df["split"] == "test") & df["gold"]]["sequence_id"].unique().tolist()),
+    }
+    (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=1))
+    return provenance
+
+
+def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
+                             local_dir: Path, class_names: list[str],
+                             progress: bool = True,
+                             heartbeat_file: Path | None = None,
+                             progress_every: int = 200) -> dict:
+    """Materialize a manifest into a trainable YOLO dataset on LOCAL disk:
+    images/<split>/<sequence_id>/<stem>.jpg (sharded per sequence - no folder
+    ever exceeds Drive-or-filesystem-hostile sizes) with mirrored labels/
+    (ultralytics resolves labels by replacing /images/ with /labels/ and scans
+    recursively). Reads come straight from the Drive frame cache; already-
+    materialized frames are skipped, so rerunning after an interruption
+    resumes. Progress heartbeats to `heartbeat_file` (put it on Drive)."""
+    import cv2
+
+    local_dir = Path(local_dir)
+    df = pd.read_csv(manifest_csv)
+    missing_frames: list[str] = []
+    n_written = 0
+    n_skipped_existing = 0
+    size_cache: dict[tuple, tuple[int, int]] = {}
+
+    group_cols = ["split", "sequence_id", "camera", "frame_idx", "source"]
+    groups = list(df.groupby(group_cols))
+    n_total = len(groups)
+    if progress:
+        from tqdm.auto import tqdm
+        groups = tqdm(groups, desc="Materializing dataset", unit="img")
+
+    import time as _time
+    started = _time.time()
+
+    def heartbeat(final: bool = False) -> None:
+        if heartbeat_file is None:
+            return
+        done = n_written + n_skipped_existing + len(missing_frames)
+        elapsed = max(_time.time() - started, 1e-6)
+        rate = n_written / elapsed
+        record = {
+            "total": n_total, "done": done, "written": n_written,
+            "skipped_existing": n_skipped_existing, "missing": len(missing_frames),
+            "pct": round(100 * done / max(n_total, 1), 1),
+            "write_rate_per_s": round(rate, 1),
+            "eta_min": 0 if final else round((n_total - done) / max(rate, 1e-6) / 60, 1),
+            "updated": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "status": "completed" if final else "running",
+        }
+        try:
+            Path(heartbeat_file).write_text(json.dumps(record, indent=1))
+        except OSError:
+            pass
+
+    n_since = 0
+    for (split, seq_id, camera, frame_idx, source), grp in groups:
+        n_since += 1
+        if n_since >= progress_every:
+            heartbeat()
+            n_since = 0
+
+        stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
+        img_dir = local_dir / "images" / split / str(seq_id)
+        lbl_dir = local_dir / "labels" / split / str(seq_id)
+        dst_img = img_dir / f"{stem}.jpg"
+        lbl_path = lbl_dir / f"{stem}.txt"
+        if dst_img.exists() and lbl_path.exists():
+            n_skipped_existing += 1
+            continue
+
+        row0 = grp.iloc[0]
+        src_path = resolve_frame_path(row0, frames_roots[str(row0["source"])])
+        if src_path is None:
+            missing_frames.append(str(row0["frame_path"]))
+            continue
+
+        size_key = (source, seq_id, camera)
+        if size_key not in size_cache:
+            img = cv2.imread(str(src_path))
+            if img is None:
+                missing_frames.append(str(src_path))
+                continue
+            size_cache[size_key] = img.shape[:2]
+        h, w = size_cache[size_key]
+
+        lines = []
+        for _, row in grp.iterrows():
+            cx = (row["x0"] + row["x1"]) / 2 / w
+            cy = (row["y0"] + row["y1"]) / 2 / h
+            bw = (row["x1"] - row["x0"]) / w
+            bh = (row["y1"] - row["y0"]) / h
+            lines.append(f"{int(row['class_id'])} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+
+        try:
+            img_dir.mkdir(parents=True, exist_ok=True)
+            lbl_dir.mkdir(parents=True, exist_ok=True)
+            _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
+            lbl_path.write_text("\n".join(lines) + "\n")
+        except OSError:
+            missing_frames.append(str(src_path))
+            continue
+        n_written += 1
+
+    heartbeat(final=True)
+
+    (local_dir / "dataset.yaml").write_text(
+        f"path: {local_dir.resolve()}\n"
+        "train: images/train\n"
+        "val: images/val\n"
+        "test: images/test\n"
+        f"names: {json.dumps(class_names)}\n"
+    )
+    return {"images_written": n_written,
+            "images_skipped_existing": n_skipped_existing,
+            "missing_frames": missing_frames}
+
+
 # Drive FUSE throws transient Errno 5 under bursts of small writes; retried with
 # exponential backoff. Module-level so tests can zero the wait.
 IO_RETRIES = 3
