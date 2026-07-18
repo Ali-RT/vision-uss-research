@@ -317,3 +317,50 @@ def test_manifest_and_materialize_roundtrip(label_world, tmp_path):
         local, class_names=prov["class_names"], progress=False)
     assert again["images_written"] == 0
     assert again["images_skipped_existing"] == result["images_written"]
+
+
+def test_materialize_parallel_correctness(tmp_path):
+    """Many sequences materialized with a thread pool: every image has its
+    label, labels use each sequence's own dimensions, no cross-shard collisions."""
+    from vision_uss_research.datasets.yolo_export import (materialize_yolo_dataset,
+                                                          write_dataset_manifest)
+    frames_root = tmp_path / "frames"
+    boxes_csv = tmp_path / "boxes.csv"
+    rows = []
+    # 40 sequences x 2 dims x 3 frames -> exercises sharding + per-seq dims in parallel
+    for i in range(40):
+        obj = "curbstone" if i % 2 else "woodenboard"
+        w, h = (96, 64) if i % 2 else (64, 96)
+        seq = f"{obj}_seq{i}"
+        for f in range(3):
+            rel = f"{seq}/rear/{f:05d}.jpg"
+            img = frames_root / rel
+            img.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(img), np.zeros((h, w, 3), np.uint8))
+            rows.append(dict(sequence_id=seq, target_object=obj, camera="rear",
+                             frame_idx=f, frame_path=rel, x0=10, y0=20, x1=40, y1=50,
+                             mask_area_frac=0.02))
+    append_boxes(boxes_csv, rows)
+    merged = merge_label_sources([{"name": "s", "boxes_csv": boxes_csv,
+                                   "frames_root": frames_root, "gold": True}])
+    split = split_by_sequence(merged, seed=0)
+    drive_dir = tmp_path / "drive"
+    prov = write_dataset_manifest(split, drive_dir, {"curbstone": 0, "woodenboard": 1},
+                                  {"s": frames_root}, seed=0)
+
+    local = tmp_path / "local"
+    result = materialize_yolo_dataset(drive_dir / "dataset_manifest.csv",
+                                      {"s": frames_root}, local,
+                                      class_names=prov["class_names"],
+                                      progress=False, num_workers=16)
+    assert result["images_written"] == 120 and not result["missing_frames"]
+    imgs = sorted(p.relative_to(local / "images") for p in local.rglob("*.jpg"))
+    lbls = sorted(p.relative_to(local / "labels").with_suffix(".jpg")
+                  for p in (local / "labels").rglob("*.txt"))
+    assert imgs == lbls and len(imgs) == 120
+    # a woodenboard (64x96) label: bw normalized by 64
+    wb = next((local / "labels").rglob("woodenboard_*.txt")).read_text().split()
+    assert abs(float(wb[3]) - 30 / 64) < 1e-4
+    # a curbstone (96x64) label: bw normalized by 96
+    cs = next((local / "labels").rglob("curbstone_*.txt")).read_text().split()
+    assert abs(float(cs[3]) - 30 / 96) < 1e-4

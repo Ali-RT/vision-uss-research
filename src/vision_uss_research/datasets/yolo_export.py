@@ -156,29 +156,85 @@ def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
                              local_dir: Path, class_names: list[str],
                              progress: bool = True,
                              heartbeat_file: Path | None = None,
-                             progress_every: int = 200) -> dict:
+                             progress_every: int = 200,
+                             num_workers: int = 48) -> dict:
     """Materialize a manifest into a trainable YOLO dataset on LOCAL disk:
     images/<split>/<sequence_id>/<stem>.jpg (sharded per sequence - no folder
     ever exceeds Drive-or-filesystem-hostile sizes) with mirrored labels/
     (ultralytics resolves labels by replacing /images/ with /labels/ and scans
-    recursively). Reads come straight from the Drive frame cache; already-
-    materialized frames are skipped, so rerunning after an interruption
-    resumes. Progress heartbeats to `heartbeat_file` (put it on Drive)."""
-    import cv2
+    recursively).
+
+    The per-file Drive read is latency-bound, so copies run in a thread pool
+    (`num_workers` concurrent round-trips - threads release the GIL during I/O);
+    image dimensions are read from the fast LOCAL copy, removing the second
+    Drive read the serial version paid per sequence. Already-materialized frames
+    are skipped, so rerunning after an interruption resumes. Progress heartbeats
+    to `heartbeat_file` (put it on Drive so it survives runtime disconnects)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _image_size(path: Path) -> tuple[int, int]:
+        """(w, h) from a local file. PIL reads the header only (fast); cv2 is the
+        fallback when Pillow is unavailable."""
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                return im.size
+        except ImportError:
+            import cv2
+            img = cv2.imread(str(path))
+            if img is None:
+                raise OSError(f"unreadable image: {path}")
+            h, w = img.shape[:2]
+            return w, h
 
     local_dir = Path(local_dir)
     df = pd.read_csv(manifest_csv)
-    missing_frames: list[str] = []
-    n_written = 0
-    n_skipped_existing = 0
-    size_cache: dict[tuple, tuple[int, int]] = {}
+    roots = {str(k): Path(v) for k, v in frames_roots.items()}
 
     group_cols = ["split", "sequence_id", "camera", "frame_idx", "source"]
     groups = list(df.groupby(group_cols))
     n_total = len(groups)
-    if progress:
-        from tqdm.auto import tqdm
-        groups = tqdm(groups, desc="Materializing dataset", unit="img")
+
+    # pre-create every split/sequence dir once, so worker threads never race on
+    # mkdir and never pay a per-frame directory syscall
+    dirs = set()
+    for (split, seq_id, *_rest), _g in groups:
+        dirs.add(local_dir / "images" / split / str(seq_id))
+        dirs.add(local_dir / "labels" / split / str(seq_id))
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+    def process_one(item) -> tuple[str, str | None]:
+        (split, seq_id, camera, frame_idx, _source), grp = item
+        stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
+        dst_img = local_dir / "images" / split / str(seq_id) / f"{stem}.jpg"
+        lbl_path = local_dir / "labels" / split / str(seq_id) / f"{stem}.txt"
+        if dst_img.exists() and lbl_path.exists():
+            return "skipped", None
+
+        row0 = grp.iloc[0]
+        src_path = resolve_frame_path(row0, roots[str(row0["source"])])
+        if src_path is None:
+            return "missing", str(row0["frame_path"])
+        try:
+            _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
+            w, h = _image_size(dst_img)   # read from the fast local copy
+        except Exception:
+            return "missing", str(src_path)
+
+        lines = []
+        for _, row in grp.iterrows():
+            cx = (row["x0"] + row["x1"]) / 2 / w
+            cy = (row["y0"] + row["y1"]) / 2 / h
+            bw = (row["x1"] - row["x0"]) / w
+            bh = (row["y1"] - row["y0"]) / h
+            lines.append(f"{int(row['class_id'])} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+        lbl_path.write_text("\n".join(lines) + "\n")
+        return "written", None
+
+    missing_frames: list[str] = []
+    n_written = 0
+    n_skipped_existing = 0
 
     import time as _time
     started = _time.time()
@@ -203,54 +259,26 @@ def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
         except OSError:
             pass
 
-    n_since = 0
-    for (split, seq_id, camera, frame_idx, source), grp in groups:
-        n_since += 1
-        if n_since >= progress_every:
-            heartbeat()
-            n_since = 0
-
-        stem = f"{seq_id}_{camera}_{int(frame_idx):05d}"
-        img_dir = local_dir / "images" / split / str(seq_id)
-        lbl_dir = local_dir / "labels" / split / str(seq_id)
-        dst_img = img_dir / f"{stem}.jpg"
-        lbl_path = lbl_dir / f"{stem}.txt"
-        if dst_img.exists() and lbl_path.exists():
-            n_skipped_existing += 1
-            continue
-
-        row0 = grp.iloc[0]
-        src_path = resolve_frame_path(row0, frames_roots[str(row0["source"])])
-        if src_path is None:
-            missing_frames.append(str(row0["frame_path"]))
-            continue
-
-        size_key = (source, seq_id, camera)
-        if size_key not in size_cache:
-            img = cv2.imread(str(src_path))
-            if img is None:
-                missing_frames.append(str(src_path))
-                continue
-            size_cache[size_key] = img.shape[:2]
-        h, w = size_cache[size_key]
-
-        lines = []
-        for _, row in grp.iterrows():
-            cx = (row["x0"] + row["x1"]) / 2 / w
-            cy = (row["y0"] + row["y1"]) / 2 / h
-            bw = (row["x1"] - row["x0"]) / w
-            bh = (row["y1"] - row["y0"]) / h
-            lines.append(f"{int(row['class_id'])} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-
-        try:
-            img_dir.mkdir(parents=True, exist_ok=True)
-            lbl_dir.mkdir(parents=True, exist_ok=True)
-            _with_io_retry(lambda: shutil.copyfile(src_path, dst_img))
-            lbl_path.write_text("\n".join(lines) + "\n")
-        except OSError:
-            missing_frames.append(str(src_path))
-            continue
-        n_written += 1
+    with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        futures = (pool.submit(process_one, item) for item in groups)
+        completed = as_completed(list(futures))
+        if progress:
+            from tqdm.auto import tqdm
+            completed = tqdm(completed, total=n_total,
+                             desc="Materializing dataset", unit="img")
+        n_since = 0
+        for fut in completed:
+            status, detail = fut.result()
+            if status == "written":
+                n_written += 1
+            elif status == "skipped":
+                n_skipped_existing += 1
+            else:
+                missing_frames.append(detail)
+            n_since += 1
+            if n_since >= progress_every:
+                heartbeat()
+                n_since = 0
 
     heartbeat(final=True)
 
