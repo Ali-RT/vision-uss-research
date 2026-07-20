@@ -1,6 +1,8 @@
 import json
+import time
 
-from vision_uss_research.runs import finish_run, new_run_id, start_run
+from vision_uss_research.runs import (finish_run, latest_run, new_run_id,
+                                      resolve_run, start_run)
 from vision_uss_research.sequences import frames_window_id, nearest_frame
 
 
@@ -19,9 +21,47 @@ def test_nearest_frame(tmp_path):
     assert nearest_frame(empty, 5) is None
 
 
+def test_stable_and_dated_run_ids():
+    # stable by default: re-running the same config resolves to the same dir
+    assert new_run_id("dataset", "v2") == "dataset_v2"
+    assert new_run_id("labels", "sam3text_v1") == "labels_sam3text_v1"
+    # dated only when explicitly requested
+    assert new_run_id("dataset", "v2", dated=True).endswith("_dataset_v2")
+    assert new_run_id("dataset", "v2", dated=True)[:8].isdigit()
+
+
+def test_latest_run_by_created_not_name(tmp_path):
+    # a legacy date-named dir created LATER must still win over an older
+    # stable-named dir - discovery uses run.json created, not lexical name
+    old = tmp_path / "dataset_v2"
+    new = tmp_path / "20200101_dataset_v2"   # name sorts earlier, created later
+    for d, created in [(old, "2026-07-15T10:00:00"), (new, "2026-07-18T10:00:00")]:
+        d.mkdir()
+        (d / "run.json").write_text(json.dumps({"created": created}))
+        (d / "dataset_manifest.csv").write_text("x")
+    assert latest_run(tmp_path, require_file="dataset_manifest.csv") == new
+
+
+def test_resolve_run_prefers_stable_then_latest(tmp_path):
+    stable = tmp_path / "dataset_v2"
+    stable.mkdir()
+    (stable / "run.json").write_text(json.dumps({"created": "2026-07-15T10:00:00"}))
+    (stable / "dataset_manifest.csv").write_text("x")
+    # explicit run_id wins
+    assert resolve_run(tmp_path, "dataset", run_id="dataset_v2") == stable
+    # tag resolves to the stable dir
+    assert resolve_run(tmp_path, "dataset", tag="v2",
+                       require_file="dataset_manifest.csv") == stable
+    # smoke dirs excluded from latest
+    smoke = tmp_path / "inventory_v2_smoke"
+    smoke.mkdir()
+    (smoke / "run.json").write_text(json.dumps({"created": "2026-07-20T10:00:00"}))
+    assert latest_run(tmp_path, exclude_suffix="_smoke") == stable
+
+
 def test_run_lifecycle(tmp_path):
     run_id = new_run_id("labels", "sam3text_v1")
-    assert run_id.endswith("_labels_sam3text_v1")
+    assert run_id == "labels_sam3text_v1"
 
     run_dir = tmp_path / run_id
     record = start_run(run_dir, config={"objects": ["curbstone"]},

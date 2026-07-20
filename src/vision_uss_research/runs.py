@@ -15,9 +15,73 @@ import time
 from pathlib import Path
 
 
-def new_run_id(stage: str, tag: str) -> str:
-    """e.g. new_run_id('labels', 'sam3text_v1') -> '20260722_labels_sam3text_v1'."""
-    return f"{time.strftime('%Y%m%d')}_{stage}_{tag}"
+def new_run_id(stage: str, tag: str, dated: bool = False) -> str:
+    """Run id from a stage and a tag.
+
+    Default is STABLE (`{stage}_{tag}`, e.g. 'dataset_v2'): re-running the same
+    config targets the same run dir, so a build interrupted and resumed on a
+    later day continues in place instead of minting a new, date-mismatched dir
+    (the bug that made cross-run paths day-dependent). The creation timestamp is
+    recorded inside run.json, not baked into the path. Bump the tag ('v2'->'v3')
+    when you want a genuinely separate run.
+
+    `dated=True` prepends the date for runs where one-per-invocation really is
+    wanted (e.g. throwaway sweeps)."""
+    base = f"{stage}_{tag}"
+    return f"{time.strftime('%Y%m%d')}_{base}" if dated else base
+
+
+def _run_created(run_dir: Path) -> float:
+    """Sort key for 'latest': run.json's created timestamp, else dir mtime."""
+    meta = run_dir / "run.json"
+    if meta.exists():
+        try:
+            created = json.loads(meta.read_text()).get("created")
+            if created:
+                return time.mktime(time.strptime(created, "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            pass
+    try:
+        return run_dir.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def latest_run(base_dir: Path, require_file: str | None = None,
+               exclude_suffix: str | None = None) -> Path | None:
+    """Newest run dir under base_dir by creation time (from run.json, not by
+    name), so discovery is robust to stable AND legacy date-prefixed ids.
+    `require_file`: only consider dirs containing this file. `exclude_suffix`:
+    skip dirs whose name ends with it (e.g. '_smoke')."""
+    base_dir = Path(base_dir)
+    if not base_dir.exists():
+        return None
+    candidates = [
+        d for d in base_dir.iterdir()
+        if d.is_dir()
+        and (require_file is None or (d / require_file).exists())
+        and (exclude_suffix is None or not d.name.endswith(exclude_suffix))
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_run_created)
+
+
+def resolve_run(base_dir: Path, stage: str, tag: str | None = None,
+                run_id: str | None = None, require_file: str | None = None,
+                exclude_suffix: str | None = None) -> Path | None:
+    """Pick a run dir: explicit `run_id` wins; else the stable `{stage}_{tag}`
+    dir if it exists; else the newest run under base_dir. One resolution rule
+    for every notebook, so 'which run does this consume' is never day-dependent."""
+    base_dir = Path(base_dir)
+    if run_id:
+        return base_dir / run_id
+    if tag:
+        stable = base_dir / f"{stage}_{tag}"
+        if stable.exists() and (require_file is None or (stable / require_file).exists()):
+            return stable
+    return latest_run(base_dir, require_file=require_file,
+                      exclude_suffix=exclude_suffix)
 
 
 def git_sha(repo_root: Path | None = None) -> str:
