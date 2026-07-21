@@ -58,3 +58,12 @@ def test_pts_match_error_detects_frame_count_mismatch():
     # differing counts mean the pairing assumption is broken -> None
     assert pts_match_error(pts[:2], pts) is None
     assert pts_match_error(np.array([]), np.array([])) is None
+
+
+def test_camera_for_direction():
+    from vision_uss_research.alignment.mf4 import camera_for_direction
+    assert camera_for_direction("forward") == "front"
+    assert camera_for_direction("backward") == "rear"
+    assert camera_for_direction("Backward") == "rear"      # case tolerant
+    assert camera_for_direction("unknown") is None
+    assert camera_for_direction("") is None

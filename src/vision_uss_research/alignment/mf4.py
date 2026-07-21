@@ -106,13 +106,24 @@ def video_frame_count(video_path: Path) -> int:
     return n
 
 
+def camera_for_direction(direction: str) -> str | None:
+    """Only ONE camera matters per sequence: the one facing the approach.
+    forward -> front, backward -> rear (same rule as the labeling pipeline)."""
+    return {"forward": "front", "backward": "rear"}.get(str(direction).lower())
+
+
 def probe_sequence(mf4_path: Path, videos: dict[str, Path],
-                   n_objbuff: int = 20) -> dict:
+                   n_objbuff: int = 20, required_camera: str | None = None) -> dict:
     """One EDA row: does this sequence support the alignment recipe?
 
     `videos`: {"front": path, "rear": path} (either may be missing).
+    `required_camera`: the direction-relevant camera ("front"/"rear"). When
+    given, `alignable` is judged on THAT camera only - the other view never
+    sees the approached object, so its alignment is irrelevant. When None,
+    any camera counts (legacy behaviour).
+
     Reports per camera whether the MF4 camera channel exists, whether its
-    sample count equals the video frame count, and the PTS match error; plus
+    sample count equals the video frame count, and the PTS ramp shape; plus
     which USS distance channels carry real readings. Never raises - failures
     are returned in the row."""
     from asammdf import MDF
@@ -149,9 +160,10 @@ def probe_sequence(mf4_path: Path, videos: dict[str, Path],
             row[f"{camera}_pts_monotone"] = int(
                 bool(np.all(np.diff(np.sort(samples)) >= -1e-6)))
 
-        # which distance channels actually carry readings
+        # distance channels: only the zones facing the approach matter
+        zone_cameras = [required_camera] if required_camera else list(videos)
         usable = []
-        for camera in videos:
+        for camera in zone_cameras:
             for ch in DISTANCE_CHANNELS.get(camera, []):
                 if ch not in names:
                     continue
@@ -169,9 +181,16 @@ def probe_sequence(mf4_path: Path, videos: dict[str, Path],
                 n_objbuff_ok += 1
         row["pdc_channels_with_data"] = "|".join(usable)
         row["n_objbuff_with_data"] = n_objbuff_ok
-        row["alignable"] = int(
-            any(row.get(f"{c}_counts_match", 0) for c in videos)
-            and (bool(usable) or n_objbuff_ok > 0))
+
+        # alignable: judged on the direction-relevant camera when known
+        if required_camera:
+            row["required_camera"] = required_camera
+            cam_ok = int(row.get(f"{required_camera}_counts_match", 0))
+        else:
+            row["required_camera"] = ""
+            cam_ok = int(any(row.get(f"{c}_counts_match", 0) for c in videos))
+        row["required_camera_counts_match"] = cam_ok
+        row["alignable"] = int(cam_ok and (bool(usable) or n_objbuff_ok > 0))
     except Exception as e:
         row["error"] = f"probe:{type(e).__name__}:{e}"
     finally:
