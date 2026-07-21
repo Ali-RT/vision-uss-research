@@ -1,4 +1,13 @@
-# MF4 <-> Video <-> USS-Distance Alignment (feasibility confirmed)
+# MF4 <-> Video <-> USS-Distance Alignment (Track B - feasibility confirmed)
+
+> **Track B is separate from the detector pipeline.** Notebooks 01-08 and the
+> trained model do NOT depend on any of this - the detector predicts class and
+> Low/High from pixels alone. Track B is an *optional enhancement* that adds
+> metric information (geometric object height, camera/USS fusion) on top.
+> Code lives in `src/vision_uss_research/alignment/` (imported by nothing in
+> the pipeline); the EDA is `notebooks/10_mf4_alignment_eda.ipynb`; artifacts
+> go to `<artifacts>/alignment/`. If Track B fails or is abandoned, the
+> detector pipeline is unaffected.
 
 Verified on the local sample `110613_20190308_LB_XO2617_039_151540` with
 `asammdf` (2026-07). This unlocks per-frame USS distance -> the geometric height
