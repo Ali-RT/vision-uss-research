@@ -76,13 +76,19 @@ def mask_sentinel(values: np.ndarray, sentinel: float | None,
 
 def distance_at(mf4_seconds, times: np.ndarray, values: np.ndarray):
     """Interpolate a distance signal (NaNs = no reading) at MF4 times.
-    Returns NaN when the signal never has a valid reading."""
+
+    Outside the span of valid readings the result is NaN, NOT the nearest
+    value: np.interp clamps by default, which would invent a constant distance
+    for frames recorded before the object entered USS range. A fabricated
+    distance would silently corrupt any height estimate, so 'no reading' must
+    stay visible as NaN."""
     times = np.asarray(times, dtype=float)
     values = np.asarray(values, dtype=float)
     good = ~np.isnan(values)
     if good.sum() == 0:
         return np.full(np.shape(mf4_seconds), np.nan, dtype=float)
-    return np.interp(mf4_seconds, times[good], values[good])
+    return np.interp(mf4_seconds, times[good], values[good],
+                     left=np.nan, right=np.nan)
 
 
 def pts_match_error(channel_samples: np.ndarray,
@@ -97,6 +103,106 @@ def pts_match_error(channel_samples: np.ndarray,
     return float(np.max(np.abs(a - b)))
 
 
+def nearest_obstacle_distance(mdf, camera: str, names=None
+                              ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Per-timestamp distance to the NEAREST obstacle in the approach direction:
+    the element-wise min across the direction-relevant PDC zones (sentinels
+    masked). For staged single-target approaches that nearest obstacle IS the
+    labeled target, which is why this is a defensible v1 rule.
+
+    Returns (times, distances_cm, zone_channels_used). Distances are NaN where
+    no zone reports a reading."""
+    if names is None:
+        names = {c.name for g in mdf.groups for c in g.channels}
+    used, series, base_t = [], [], None
+    for ch in DISTANCE_CHANNELS.get(camera, []):
+        if ch not in names:
+            continue
+        sig = mdf.get(ch)
+        t = np.asarray(sig.timestamps, dtype=float)
+        v = mask_sentinel(np.asarray(sig.samples, dtype=float),
+                          DISTANCE_SENTINELS["pdc"], "ge")
+        if np.isfinite(v).sum() == 0:
+            continue
+        if base_t is None:
+            base_t = t
+            series.append(v)
+        else:
+            # zones share a clock but may differ in length; resample onto base_t
+            good = np.isfinite(v)
+            series.append(np.interp(base_t, t[good], v[good],
+                                    left=np.nan, right=np.nan))
+        used.append(ch)
+    if base_t is None:
+        return np.array([]), np.array([]), []
+    # min across zones, NaN where no zone reports (via +inf sentinel, so numpy
+    # never warns about all-NaN slices)
+    stack = np.vstack(series)
+    filled = np.where(np.isnan(stack), np.inf, stack)
+    nearest = np.min(filled, axis=0)
+    nearest[~np.isfinite(nearest)] = np.nan
+    return base_t, nearest, used
+
+
+def objbuff_distance(mdf, names=None, n_objbuff: int = 20
+                     ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Nearest-object distance from the MAP object buffer (mm).
+
+    Preferred over `nearest_obstacle_distance` (PDC zones) for frame-level work:
+    measured on the sample sequence, the object buffer covered 20/20 frames of
+    the 0.30-0.85 approach window (range ~370-3000 mm) while PDC zones covered
+    only 3/20 - PDC is a short-range (~1.2 m) parking warning, whereas the
+    object buffer holds MAP objects out to ~5 m.
+
+    CAVEAT: this is the min across ALL live slots, so in multi-object scenes it
+    can switch between objects (monotonicity < 1 is the tell). Selecting the
+    slot that tracks the *labeled* target is the open problem - see
+    notebooks/11."""
+    if names is None:
+        names = {c.name for g in mdf.groups for c in g.channels}
+    series, base_t, used = [], None, []
+    for i in range(1, n_objbuff + 1):
+        ch = OBJBUFF_DIST.format(i=i)
+        if ch not in names:
+            continue
+        sig = mdf.get(ch)
+        t = np.asarray(sig.timestamps, dtype=float)
+        v = mask_sentinel(np.asarray(sig.samples, dtype=float),
+                          DISTANCE_SENTINELS["objbuff"], "eq")
+        if np.isfinite(v).sum() == 0:
+            continue
+        if base_t is None:
+            base_t = t
+            series.append(v)
+        else:
+            good = np.isfinite(v)
+            series.append(np.interp(base_t, t[good], v[good],
+                                    left=np.nan, right=np.nan))
+        used.append(ch)
+    if base_t is None:
+        return np.array([]), np.array([]), []
+    stack = np.vstack(series)
+    filled = np.where(np.isnan(stack), np.inf, stack)
+    nearest = np.min(filled, axis=0)
+    nearest[~np.isfinite(nearest)] = np.nan
+    return base_t, nearest, used
+
+
+def approach_monotonicity(distances: np.ndarray) -> float | None:
+    """Fraction of consecutive valid readings where distance DECREASES - the
+    signature of approaching a static object. ~1.0 = clean approach, ~0.5 =
+    noise, ~0.0 = receding. None when there are too few readings."""
+    v = np.asarray(distances, dtype=float)
+    v = v[np.isfinite(v)]
+    if len(v) < 3:
+        return None
+    d = np.diff(v)
+    moving = d[d != 0]
+    if len(moving) == 0:
+        return None
+    return float((moving < 0).sum() / len(moving))
+
+
 def video_frame_count(video_path: Path) -> int:
     """Frame count from the container header (cheap - no decode)."""
     import cv2
@@ -104,6 +210,65 @@ def video_frame_count(video_path: Path) -> int:
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
     return n
+
+
+def frame_distances(mf4_path: Path, camera: str, frame_pts,
+                    source: str = "objbuff") -> dict:
+    """The whole Track B chain for one sequence, in one call.
+
+    video PTS -> MF4 master time (camera-channel pairing) -> nearest-object
+    USS distance in MILLIMETRES, sampled at each frame.
+
+    `source`: "objbuff" (default - MAP object buffer, ~5 m range, near-full
+    frame coverage) or "pdc" (direction-relevant PDC zones, cm, ~1.2 m range,
+    so mostly NaN across a full approach window). Frames outside the span of
+    valid readings are NaN, never a fabricated constant.
+
+    Returns {"distance_mm" aligned to frame_pts, "camera_channel",
+    "channels_used", "monotonicity", "coverage", "error"}. Never raises."""
+    from asammdf import MDF
+
+    out = {"distance_mm": None, "camera_channel": "", "channels_used": [],
+           "monotonicity": None, "coverage": 0.0, "error": ""}
+    try:
+        mdf = MDF(str(mf4_path))
+    except Exception as e:
+        out["error"] = f"open:{type(e).__name__}"
+        return out
+    try:
+        names = {c.name for g in mdf.groups for c in g.channels}
+        cam_ch = find_camera_channel(names, camera)
+        if cam_ch is None:
+            out["error"] = f"no_camera_channel:{camera}"
+            return out
+        sig = mdf.get(cam_ch)
+        pts, mf4t = sorted_pairs(sig.samples, sig.timestamps)
+        out["camera_channel"] = cam_ch
+
+        if source == "pdc":
+            t, dist, chans = nearest_obstacle_distance(mdf, camera, names)
+            unit_scale = 10.0        # PDC zones read in cm
+        else:
+            t, dist, chans = objbuff_distance(mdf, names)
+            unit_scale = 1.0         # object buffer already in mm
+        if len(t) == 0:
+            out["error"] = f"no_distance_channel:{source}:{camera}"
+            return out
+        out["channels_used"] = chans
+        out["monotonicity"] = approach_monotonicity(dist)
+
+        mf4_at_frames = video_to_mf4(np.asarray(frame_pts, dtype=float), pts, mf4t)
+        d = distance_at(mf4_at_frames, t, dist) * unit_scale
+        out["distance_mm"] = d
+        out["coverage"] = float(np.isfinite(d).mean()) if np.size(d) else 0.0
+    except Exception as e:
+        out["error"] = f"probe:{type(e).__name__}:{e}"
+    finally:
+        try:
+            mdf.close()
+        except Exception:
+            pass
+    return out
 
 
 def camera_for_direction(direction: str) -> str | None:
