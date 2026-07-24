@@ -226,15 +226,28 @@ def frame_distances(mf4_path: Path, camera: str, frame_pts,
 
     Returns {"distance_mm" aligned to frame_pts, "camera_channel",
     "channels_used", "monotonicity", "coverage", "error"}. Never raises."""
+    import time
+
     from asammdf import MDF
 
     out = {"distance_mm": None, "camera_channel": "", "channels_used": [],
            "monotonicity": None, "coverage": 0.0, "error": ""}
-    try:
-        mdf = MDF(str(mf4_path))
-    except Exception as e:
-        out["error"] = f"open:{type(e).__name__}"
-        return out
+    # Opening a 90 MB MF4 over Drive under many parallel workers throws transient
+    # Errno 5; retry with backoff so a flaky read is not recorded as a permanent
+    # error (this was the main cause of the high error rate in the first run).
+    mdf = None
+    for attempt in range(3):
+        try:
+            mdf = MDF(str(mf4_path))
+            break
+        except OSError:
+            if attempt == 2:
+                out["error"] = "open:OSError"
+                return out
+            time.sleep(2.0 * (2 ** attempt))
+        except Exception as e:
+            out["error"] = f"open:{type(e).__name__}"
+            return out
     try:
         names = {c.name for g in mdf.groups for c in g.channels}
         cam_ch = find_camera_channel(names, camera)
