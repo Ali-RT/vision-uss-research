@@ -71,3 +71,52 @@ def low_high_from_height(height_mm, threshold_mm: float = LOW_HIGH_THRESHOLD_MM)
     out = np.where(h < threshold_mm, "low", "high").astype(object)
     out[~np.isfinite(h)] = None
     return out
+
+
+def roc_auc(scores, is_positive) -> float:
+    """AUC with the convention: a HIGHER score means more likely positive.
+    Rank-based (Mann-Whitney U), tie-aware. NaN if a class is empty."""
+    s = np.asarray(scores, dtype=float)
+    y = np.asarray(is_positive, dtype=int)
+    good = np.isfinite(s)
+    s, y = s[good], y[good]
+    n_pos, n_neg = int(y.sum()), int((y == 0).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(s, kind="mergesort")
+    ranks = np.empty(len(s), dtype=float)
+    ranks[order] = np.arange(1, len(s) + 1)
+    # average ranks within tied score groups
+    _, inv, counts = np.unique(s, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(counts))
+    np.add.at(sums, inv, ranks)
+    ranks = (sums / counts)[inv]
+    return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def calibrate_low_threshold(height_mm, is_low) -> dict:
+    """Choose the height threshold that best separates low from high: predict
+    'low' when height < threshold, maximizing balanced accuracy (mean of low
+    and high recall). Returns the threshold, its balanced accuracy, and the
+    threshold-independent AUC (separability of the score). Fitting this on
+    labeled data lets the biased-but-monotonic geometric height act as a
+    class-agnostic Low/High score - useful for objects with no class label."""
+    h = np.asarray(height_mm, dtype=float)
+    y = np.asarray(is_low, dtype=int)
+    good = np.isfinite(h)
+    h, y = h[good], y[good]
+    n_low, n_high = int(y.sum()), int((y == 0).sum())
+    if n_low == 0 or n_high == 0:
+        return {"threshold_mm": None, "balanced_accuracy": None, "auc": None,
+                "n_low": n_low, "n_high": n_high}
+    best_t, best_bacc = None, -1.0
+    for t in np.unique(h):
+        pred_low = h < t
+        rl = pred_low[y == 1].mean()
+        rh = (~pred_low[y == 0]).mean()
+        bacc = (rl + rh) / 2
+        if bacc > best_bacc:
+            best_bacc, best_t = bacc, float(t)
+    # lower height -> more likely low, so feed -h as the "higher=positive" score
+    return {"threshold_mm": best_t, "balanced_accuracy": float(best_bacc),
+            "auc": roc_auc(-h, y), "n_low": n_low, "n_high": n_high}

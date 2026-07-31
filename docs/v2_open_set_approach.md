@@ -88,6 +88,37 @@ generalized to obstacle types never seen in training?
    depth misses these obstacles; detector + USS distance beats it at a
    fraction of the compute).
 
+## Track B status & findings (2026-07, notebooks 11-13)
+
+- **Alignment solved**: MF4 WebCam/WebCam3 channels pair each video frame to
+  master time exactly (`docs/mf4_video_alignment.md`). 4,631 alignable
+  sequences; 1,424 with a clean-approach distance curve (notebook 11).
+- **Focal chain validated**: geometric height on the ISO pole = ~4% error -
+  the alignment -> distance -> focal pipeline is physically correct (nb12).
+- **Fundamental limit on low objects**: naive box-height geometry overestimates
+  flat objects ~5x, because a ground-hugging object's box top is a farther
+  ground point, not a raised edge - a monocular ambiguity no ground-plane
+  recompute fixes (it is algebraically identical under USS distance). This is a
+  reportable finding: it MOTIVATES the learned appearance detector (99.8%
+  Low/High), which does not share the ambiguity.
+- **Usable workaround (nb13)**: the biased-but-monotonic geometric height is a
+  class-agnostic Low/High *score*; a threshold calibrated on labeled data
+  recovers Low/High far better than the naive 25 cm cut. Value is for UNKNOWN
+  objects (calibrate on knowns, apply to unknowns).
+
+## Phase D - the fusion experiment (STILL PLANNED, the headline)
+
+Combine three INDEPENDENT Low/High signals on the aligned test sequences:
+1. the detector's class-based Low/High (99.8% on knowns);
+2. the USS stack's own `ClassProbHigh` / `HeightProb` (the production baseline);
+3. the geometric height score (nb13, class-agnostic).
+
+Questions: does fusing camera + USS beat either alone in the ambiguous 10-30 cm
+band? Does the camera correct the USS height classifier's errors (the practical
+"camera assists USS" claim)? This does NOT depend on accurate metric height -
+it is the camera-USS-complementarity result and the paper's headline. Build as
+notebook 14 once nb13's real numbers are in.
+
 **Positioning:** intersection of open-set detection (rarely evaluated on
 safety-relevant traversability), foundation-model auto-labeling (SAM3 as
 annotator), and camera-ultrasonic fusion (unique data asset: per-cycle USS

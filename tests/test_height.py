@@ -57,3 +57,40 @@ def test_low_high_from_height():
     out = low_high_from_height([90.0, 250.0, 300.0, np.nan])
     assert list(out[:3]) == ["low", "high", "high"]   # <250 low, >=250 high
     assert out[3] is None
+
+
+def test_roc_auc_perfect_and_random():
+    from vision_uss_research.alignment.height import roc_auc
+    # perfectly separable: positives score higher
+    assert roc_auc([0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1]) == 1.0
+    # inverted -> 0.0
+    assert roc_auc([0.9, 0.8, 0.2, 0.1], [0, 0, 1, 1]) == 0.0
+    # single class -> NaN, no crash
+    import numpy as np
+    assert np.isnan(roc_auc([0.1, 0.2], [1, 1]))
+    # ties handled (all equal -> 0.5)
+    assert abs(roc_auc([0.5, 0.5, 0.5, 0.5], [0, 1, 0, 1]) - 0.5) < 1e-9
+
+
+def test_calibrate_low_threshold_finds_the_split():
+    from vision_uss_research.alignment.height import calibrate_low_threshold
+    # low objects ~200-570mm, high objects ~850-1700mm (like the real medians)
+    low = [180.0, 380.0, 570.0, 300.0]
+    high = [860.0, 1020.0, 1120.0, 1440.0]
+    r = calibrate_low_threshold(low + high, [1, 1, 1, 1, 0, 0, 0, 0])
+    assert 570.0 < r["threshold_mm"] <= 860.0     # threshold lands in the gap
+    assert r["balanced_accuracy"] == 1.0          # cleanly separable here
+    assert r["auc"] == 1.0
+    assert r["n_low"] == 4 and r["n_high"] == 4
+
+
+def test_calibrate_threshold_reports_overlap():
+    from vision_uss_research.alignment.height import calibrate_low_threshold
+    # overlapping distributions -> imperfect but > chance
+    import numpy as np
+    rng = np.random.default_rng(0)
+    low = rng.normal(400, 150, 200)
+    high = rng.normal(900, 250, 200)
+    r = calibrate_low_threshold(np.r_[low, high], np.r_[np.ones(200), np.zeros(200)])
+    assert 0.75 < r["balanced_accuracy"] < 1.0
+    assert 0.8 < r["auc"] < 1.0
