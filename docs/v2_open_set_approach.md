@@ -101,10 +101,16 @@ generalized to obstacle types never seen in training?
   recompute fixes (it is algebraically identical under USS distance). This is a
   reportable finding: it MOTIVATES the learned appearance detector (99.8%
   Low/High), which does not share the ambiguity.
-- **Usable workaround (nb13)**: the biased-but-monotonic geometric height is a
-  class-agnostic Low/High *score*; a threshold calibrated on labeled data
-  recovers Low/High far better than the naive 25 cm cut. Value is for UNKNOWN
-  objects (calibrate on knowns, apply to unknowns).
+- **Geometric Low/High is a WEAK standalone signal (nb13, full run)**:
+  calibrated threshold 738 mm, held-out balanced accuracy 0.64, AUC 0.70. The
+  aggregate median height is right for tall objects (pole median 1122 vs 1080
+  mm), but per-SEQUENCE height has huge variance (pole per-seq rel-err ~67%;
+  curbstone called-low only 57% of the time despite a 570 mm median) because
+  box height conflates vertical extent with ground-plane foreshortening, and
+  that conflation depends on the per-sequence approach geometry. Conclusion:
+  geometric height is NOT operationally useful for the drive-over decision -
+  which is itself a clean finding that MOTIVATES the learned detector (99.8%).
+  No further geometry work is warranted (the ambiguity is fundamental).
 
 ## Phase D - the fusion experiment (STILL PLANNED, the headline)
 
