@@ -112,7 +112,32 @@ generalized to obstacle types never seen in training?
   which is itself a clean finding that MOTIVATES the learned detector (99.8%).
   No further geometry work is warranted (the ambiguity is fundamental).
 
-## Phase D - the fusion experiment (STILL PLANNED, the headline)
+## Phase D RESULT (nb14, full gold-test run) - the headline holds
+
+Per-sequence Low/High on 887 gold-test sequences with both signals:
+- **USS alone: 62.9%** (production `ClassProbHigh`, dominant-object median).
+- **Camera detector alone: 93.6%** (per-sequence aggregate vote; note this is
+  the stricter per-sequence metric, vs nb07's 99.8% on IoU-matched detections).
+- **Camera rescues USS on 93.0%** of the 329 sequences where USS is wrong -
+  the quantified "camera assists USS" claim.
+
+**Complementary failure modes (the fusion motivation, not just "camera wins"):**
+- USS is GOOD at flat/low (curbstone 0.86, speedbump 0.86, woodenboard 0.88)
+  and POOR at tall/vertical (bicyclestand 0.25, dummychild 0.60, pole 0.71,
+  high_other/unknown 0.54).
+- The camera is the mirror image. woodenboard is the one class where USS beats
+  the camera (camera_gain -0.31) - flat/low, exactly USS's strength and the
+  camera's (and geometry's) weakness.
+- This mirrors the geometric-height finding: monocular vision struggles on
+  flat/low, USS struggles on tall - so they genuinely complement.
+
+**Open improvement**: the current fusion rule ("trust detector when present")
+gives fused == detector == 0.936. USS is right on 60% of the camera's 57 errors
+(mostly flat/low), so a complementarity-aware fusion (confidence-gated, or a
+logistic meta-classifier on [det_bin, det_conf, uss_prob]) should beat 0.936 -
+the "fusion > both" figure. Worthwhile but not required; the headline stands.
+
+## Phase D - the fusion experiment (original plan)
 
 Combine three INDEPENDENT Low/High signals on the aligned test sequences:
 1. the detector's class-based Low/High (99.8% on knowns);
