@@ -131,11 +131,21 @@ Per-sequence Low/High on 887 gold-test sequences with both signals:
 - This mirrors the geometric-height finding: monocular vision struggles on
   flat/low, USS struggles on tall - so they genuinely complement.
 
-**Open improvement**: the current fusion rule ("trust detector when present")
-gives fused == detector == 0.936. USS is right on 60% of the camera's 57 errors
-(mostly flat/low), so a complementarity-aware fusion (confidence-gated, or a
-logistic meta-classifier on [det_bin, det_conf, uss_prob]) should beat 0.936 -
-the "fusion > both" figure. Worthwhile but not required; the headline stands.
+**Meta-fusion result (nb15, class-balanced logistic on [det_bin, det_conf,
+uss_prob], held-out 355 seqs)**:
+- USS 0.734, detector 0.931, **meta-fusion 0.933** balanced accuracy - meta
+  edges >= both signals on both metrics, so the clean "fusion >= both" figure
+  holds, but the gain is MARGINAL (~0.2 pts).
+- Interpretation: the camera detector is near-ceiling, so fusion adds little.
+  The learned fuser does use USS (uss_prob weight 1.14) but det_is_high (2.38)
+  dominates - USS only tips UNCERTAIN camera calls. It cannot rescue CONFIDENT
+  camera errors (e.g. woodenboard: USS 1.00, camera 0.40, meta stays 0.40),
+  which a global logistic model won't override on n=5.
+- **Paper statement**: the camera alone is sufficient for the drive-over
+  decision (93%); USS adds a marginal, confirmatory signal. The headline is
+  nb14's "camera corrects the production USS on 93% of its errors", not the
+  fusion delta. No further fusion tuning warranted (per-class rules on tiny
+  counts = overfitting). EXPERIMENTAL PROGRAM COMPLETE.
 
 ## Phase D - the fusion experiment (original plan)
 
