@@ -10,7 +10,7 @@ this is the writing plan. Working title:
 
 | venue | deadline | notes |
 |---|---|---|
-| **WACV 2027, Round 2** | **2026-08-28** (suppl. 08-30), decisions 10-09 | Single-shot (no rebuttal). WACV explicitly welcomes applications papers; algorithms/applications tracks. 26 days out. |
+| **WACV 2027, Round 2** | **registration 2026-08-21**, paper **2026-08-28** (suppl. 08-30), decisions 10-09 | Single-shot (no rebuttal). WACV explicitly welcomes applications papers. HARD GATE: the paper must be registered (title/abstract/authors) by Aug 21 or it cannot be submitted at all. |
 | **IEEE IV 2027** (Perth, Jun 2027) | **2026-11-15** | Best audience fit: parking, USS, production-stack comparison. Notification 2027-01-15. |
 | ITSC 2027 (Boston, Sep 2027) | ~Feb 2027 (unannounced) | Fallback; same community as IV. |
 | WACV workshop / CVPR-W 2027 | winter | Fallback if main tracks reject. |
@@ -116,7 +116,7 @@ format. Write WACV-first; an IV port is mostly compression.
 |---|---|
 | Aug 3-8 | Launch holdout rotations on Colab. Meanwhile: paper skeleton in LaTeX (WACV template), Tab 1/2/4 filled from existing runs, Fig 4/5 scripted. |
 | Aug 9-15 | Full draft of sections 3-6 (results-first). Fig 1-3 produced from nb08/09 artifacts. Rotation results -> Tab 3. |
-| Aug 16-21 | Intro, related work, limitations. Internal full read; numbers cross-checked against run.json provenance. |
+| Aug 16-21 | Intro, related work, limitations. Internal full read; numbers cross-checked against run.json provenance. **REGISTER the paper (title/abstract/authors) by Aug 21 - hard gate, aim for Aug 15-18.** |
 | Aug 22-26 | Polish pass, co-author review, supplementary (extra galleries, per-class tables, reproducibility statement). |
 | Aug 27-28 | Buffer + submit (suppl. due Aug 30). |
 
