@@ -15,8 +15,12 @@ this is the writing plan. Working title:
 | ITSC 2027 (Boston, Sep 2027) | ~Feb 2027 (unannounced) | Fallback; same community as IV. |
 | WACV workshop / CVPR-W 2027 | winter | Fallback if main tracks reject. |
 
-**Recommendation: submit WACV 2027 Round 2 (Aug 28), with IV 2027 (Nov 15) as
-the pre-planned fallback.** Rationale: every number is already in hand, so 26
+**DECIDED 2026-08-02: WACV 2027 Round 2 (Aug 28), with IV 2027 (Nov 15) as
+the pre-planned fallback.** Note CVPR 2027's deadline (~Nov 13) collides with
+IV's; WACV reviews arrive Oct 9, so a WACV reject still leaves both November
+options open. CVPR main is a poor fit for this paper (applications profile,
+proprietary data, no public benchmark) - IV is the November default unless
+the WACV reviews argue otherwise. Rationale: every number is already in hand, so 26
 days of pure writing is feasible; the CV-side contributions (SAM3-as-annotator
 at scale, trained open-set buckets, leave-object-out protocol) are what WACV
 values; and a WACV reject returns reviews by Oct 9 - five weeks before the IV
@@ -90,10 +94,17 @@ format. Write WACV-first; an IV port is mostly compression.
 ## Remaining work items
 
 1. **Holdout rotation (the one open experiment, week 1).** Currently only
-   cone. Run bollard + bush (+ stone if time): edit
-   `dataset_v2.yaml: holdout_objects`, rerun nb05->07 per rotation (~1 GPU
-   day each, parallelizable by starting each after the previous's dataset
-   step). Pre-registered risk in `v2_open_set_approach.md`; Table 3 needs it.
+   cone. Configs are ready: `dataset_v2_holdout_bollard.yaml` /
+   `dataset_v2_holdout_bush.yaml` (identical to dataset_v2 except the held-out
+   type; ~1 GPU day per rotation). Recipe per rotation, e.g. bollard:
+   - nb05: `CONFIG_NAME = "dataset_v2_holdout_bollard"` (seconds - manifest only)
+   - nb06: `DATASET_RUN = "dataset_v2holdbollard"`,
+     `TRAIN_TAG_OVERRIDE = "v1_holdbollard"`
+   - nb07: `MODEL_RUN = "train_v1_holdbollard"`, `EVAL_TAG = "holdbollard"`
+   The tag knobs keep rotation runs fully separate from the baseline
+   `train_v1` / `eval_test` runs. Table 3 rows = cone (existing) + bollard +
+   bush; report bucket recall and Low/High accuracy on the held-out type.
+   Pre-registered risk in `v2_open_set_approach.md`.
 2. **Writing** (below).
 3. Optional, only if time: scene-tag stratification of bucket recall
    (anti-shortcut control); investigate 2,138 missing MF4s (does not block -
