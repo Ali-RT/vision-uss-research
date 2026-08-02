@@ -24,3 +24,5 @@ data/manifests/
 !data/processed/.gitkeep
 !data/samples/.gitkeep
 !data/manifests/.gitkeep
+# private paper workspace (drafts, results scratch) - never committed
+paper/
