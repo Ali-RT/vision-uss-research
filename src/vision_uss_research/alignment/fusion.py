@@ -48,8 +48,12 @@ class LogisticFusion:
     P(high). Standardizes features internally."""
 
     def __init__(self, lr: float = 0.1, epochs: int = 2000, l2: float = 1e-3,
-                 seed: int = 0):
+                 seed: int = 0, class_weight: str | None = "balanced"):
         self.lr, self.epochs, self.l2, self.seed = lr, epochs, l2, seed
+        # "balanced" weights each sample by inverse class frequency, so the
+        # minority class (low, ~20%) is not drowned out - optimizes toward
+        # balanced accuracy rather than raw accuracy on imbalanced data.
+        self.class_weight = class_weight
         self.w = self.b = self.mu = self.sd = None
 
     def fit(self, X, y) -> "LogisticFusion":
@@ -63,10 +67,18 @@ class LogisticFusion:
         self.w = rng.normal(0, 0.01, Xs.shape[1])
         self.b = 0.0
         n = len(y)
+        if self.class_weight == "balanced":
+            n_pos, n_neg = y.sum(), (y == 0).sum()
+            w_pos = n / (2 * n_pos) if n_pos else 1.0
+            w_neg = n / (2 * n_neg) if n_neg else 1.0
+            sw = np.where(y == 1, w_pos, w_neg)
+        else:
+            sw = np.ones(n)
+        sw_sum = sw.sum()
         for _ in range(self.epochs):
             p = 1 / (1 + np.exp(-(Xs @ self.w + self.b)))
-            grad_w = Xs.T @ (p - y) / n + self.l2 * self.w
-            grad_b = float((p - y).mean())
+            grad_w = Xs.T @ (sw * (p - y)) / sw_sum + self.l2 * self.w
+            grad_b = float((sw * (p - y)).sum() / sw_sum)
             self.w -= self.lr * grad_w
             self.b -= self.lr * grad_b
         return self

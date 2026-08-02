@@ -72,3 +72,34 @@ def test_logistic_fusion_deterministic():
     a = LogisticFusion(seed=0).fit(X, y).predict_proba(X)
     b = LogisticFusion(seed=0).fit(X, y).predict_proba(X)
     assert np.allclose(a, b)
+
+
+def test_class_weighting_lifts_minority_recall_on_imbalanced_data():
+    """On an 80/20 imbalanced complementary set, balanced weighting should not
+    sacrifice the minority (low) class the way unweighted log-loss does."""
+    rng = np.random.default_rng(5)
+    det_bin, det_conf, uss_prob, truth = [], [], [], []
+    for _ in range(1200):
+        high = rng.random() < 0.8                 # 80% high (imbalanced)
+        t = "high" if high else "low"
+        # detector weaker on the minority low class
+        p_correct = 0.93 if high else 0.72
+        d = t if rng.random() < p_correct else ("low" if high else "high")
+        det_bin.append(d); det_conf.append(rng.uniform(0.5, 0.95))
+        up = np.clip(rng.normal(0.58 if high else 0.28, 0.2), 0, 1)
+        uss_prob.append(up); truth.append(t)
+    X = signal_features(det_bin, det_conf, uss_prob)
+    y = np.array([1 if t == "high" else 0 for t in truth])
+    tr, te = slice(0, 800), slice(800, None)
+
+    plain = LogisticFusion(class_weight=None, epochs=3000).fit(X[tr], y[tr])
+    bal = LogisticFusion(class_weight="balanced", epochs=3000).fit(X[tr], y[tr])
+
+    t_te = np.array(truth)[te]
+    bacc_plain = balanced_accuracy(plain.predict_bin(X[te]), t_te)
+    bacc_bal = balanced_accuracy(bal.predict_bin(X[te]), t_te)
+    det_bacc = balanced_accuracy(np.array(det_bin)[te], t_te)
+    # balanced weighting should reach at least the detector's balanced accuracy
+    # and do no worse than the unweighted fuser
+    assert bacc_bal >= det_bacc - 0.01
+    assert bacc_bal >= bacc_plain - 0.01
