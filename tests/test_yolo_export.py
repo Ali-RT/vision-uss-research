@@ -284,6 +284,10 @@ def test_manifest_and_materialize_roundtrip(label_world, tmp_path):
     # Drive side holds only small files - no images
     assert (drive_dir / "dataset_manifest.csv").exists()
     assert not list(drive_dir.rglob("*.jpg"))
+    # target_object survives into the manifest (held-out slicing needs it)
+    man = pd.read_csv(drive_dir / "dataset_manifest.csv")
+    assert "target_object" in man.columns
+    assert set(man["target_object"]) == {"curbstone", "woodenboard"}
     assert prov["class_names"] == ["curbstone", "woodenboard"]
     assert prov["gold_test_sequences"]
 

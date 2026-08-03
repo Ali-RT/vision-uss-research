@@ -124,8 +124,11 @@ def write_dataset_manifest(df: pd.DataFrame, out_dir: Path, class_ids: dict[str,
     if unknown:
         raise ValueError(f"no class id for objects: {unknown}")
 
-    manifest = df[["split", "sequence_id", "camera", "frame_idx", "source",
-                   "frame_path", "x0", "y0", "x1", "y1"]].copy()
+    # target_object is kept so held-out types can be sliced out of aggregate
+    # metrics later (a bucket row mixes held-out and known members otherwise)
+    manifest = df[["split", "sequence_id", "target_object", "camera",
+                   "frame_idx", "source", "frame_path",
+                   "x0", "y0", "x1", "y1"]].copy()
     manifest["class_id"] = df[name_col].map(class_ids)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(out_dir / "dataset_manifest.csv", index=False)
