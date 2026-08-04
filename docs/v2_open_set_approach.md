@@ -48,8 +48,31 @@ types outside the training set.
 `dataset_v2.yaml: holdout_objects` removes chosen object types from train/val
 entirely (all their sequences forced to the test split). Bucket recall and
 Low/High accuracy on the held-out type measures **generalization to never-seen
-obstacles** - the honest version of the "Unknown" claim. Default holdout: cone;
-the full result rotates the holdout (cone / bollard / bush / stone).
+obstacles** - the honest version of the "Unknown" claim.
+
+**ROTATION RESULTS (2026-08, final - notebooks 05-07 x3, heldout_slice)**:
+
+| held-out | seqs | frame recall | absorbed by | bucket share | seq Low/High |
+|---|---|---|---|---|---|
+| bollard | 177 | 0.404 | pole (99%) | 0.006 | 0.751 (100% of detected) |
+| cone | 407 | 0.149 | pole (97%) | 0.001 | 0.506 (97% of detected) |
+| bush | 867 | 0.001 | curbstone (11 det.) | 0.000 | 0.000 |
+
+CORRECTION: the previously quoted "cone recall 0.42" was the run's AGGREGATE
+high_other row, contaminated by known bucket members. Never quote aggregate
+bucket metrics for held-out types - use nb07's heldout_slice.csv (which
+exists for exactly this reason).
+
+**Verdict - claim 2 reframed as a characterized negative result**: the
+trained bucket contributes ~zero open-set capability in every regime (even
+bush, whose in-bucket neighbor tree stayed in training). Generalization is
+ABSORPTION into the visually nearest named class, decaying with distance
+from the training support. The deterministic class->bin map keeps absorbed
+detections safe when the neighbor shares the bin (bollard->pole); an
+out-of-support obstacle (bush) is invisible or hallucinated as curbstone
+(HIGH called LOW - the dangerous direction; curbstone precision 0.74->0.31
+in the bush rotation). This SHARPENS the fusion motivation: USS detects the
+hedge the camera cannot see.
 
 ### Metric height without a regression head
 
