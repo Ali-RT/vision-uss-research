@@ -26,3 +26,6 @@ data/manifests/
 !data/manifests/.gitkeep
 # private paper workspace (drafts, results scratch) - never committed
 paper/
+
+# internal-network tooling (FML downloader) - never committed
+internal/

@@ -1,0 +1,48 @@
+# ABLATION (reviewer P0): 6 named classes only - every bucket-member type is
+# held out of train/val entirely. The bucket class ids remain in the label
+# space (so held-out GT keeps valid ids) but receive ZERO training data;
+# allow_empty_classes waives notebook 05's starved-class assert for exactly
+# these two. Bonus: notebook 07's heldout_slice then reports absorption for
+# ALL 12 bucket types at once (each has test frames and no train/val).
+stage: dataset
+tag: v2nobucket
+
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true
+
+class_groups:
+  hose: low_other
+  step: low_other
+  cone: high_other
+  bollard: high_other
+  car: high_other
+  tree: high_other
+  bush: high_other
+  stonelarge: high_other
+  stonemiddle: high_other
+  cubestandard: high_other
+  ubarrier: high_other
+  fence: high_other
+
+class_ids:
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+  low_other: 6
+  high_other: 7
+
+holdout_objects: [hose, step, cone, bollard, car, tree, bush, stonelarge,
+                  stonemiddle, cubestandard, ubarrier, fence]
+allow_empty_classes: [low_other, high_other]
+
+split:
+  gold_test_frac: 0.20
+  auto_test_frac: 0.10
+  val_frac: 0.15
+seed: 0

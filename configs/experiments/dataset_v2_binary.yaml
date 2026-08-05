@@ -1,0 +1,43 @@
+# ABLATION (reviewer P0): direct binary Low/High detector - every object
+# type maps straight to its height bin; no named classes, no buckets. Same
+# cone holdout as the baseline so the open-set row stays comparable.
+stage: dataset
+tag: v2binary
+
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true
+
+class_groups:
+  curbstone: low
+  speedbump: low
+  woodenboard: low
+  hose: low
+  step: low
+  pole: high
+  dummychild: high
+  bicyclestand: high
+  cone: high
+  bollard: high
+  car: high
+  tree: high
+  bush: high
+  stonelarge: high
+  stonemiddle: high
+  cubestandard: high
+  ubarrier: high
+  fence: high
+
+class_ids:
+  low: 0
+  high: 1
+
+holdout_objects: [cone]
+
+split:
+  gold_test_frac: 0.20
+  auto_test_frac: 0.10
+  val_frac: 0.15
+seed: 0
