@@ -368,3 +368,28 @@ def test_materialize_parallel_correctness(tmp_path):
     # a curbstone (96x64) label: bw normalized by 96
     cs = next((local / "labels").rglob("curbstone_*.txt")).read_text().split()
     assert abs(float(cs[3]) - 30 / 96) < 1e-4
+
+
+def test_day_grouped_split_no_day_crosses_splits(tmp_path):
+    """Leakage audit: with group='day', no recording day appears in more
+    than one split, and every class keeps training data when it spans
+    multiple days."""
+    from vision_uss_research.datasets.yolo_export import split_by_day
+    rows = []
+    rng = np.random.default_rng(0)
+    days = [f"2019{m:02d}{d:02d}" for m in (3, 4, 5) for d in (1, 8, 15, 22)]
+    for i, day in enumerate(days * 3):                 # 36 sequences, 12 days
+        seq = f"{110000+i}_{day}_LB_X_{i:03d}"
+        obj = ["curbstone", "pole", "woodenboard"][i % 3]
+        rows.append(dict(sequence_id=seq, target_object=obj, gold=False,
+                         camera="rear", frame_idx=0, frame_path="x",
+                         x0=0, y0=0, x1=10, y1=10, mask_area_frac=0.01,
+                         source="s"))
+    df = pd.DataFrame(rows)
+    out = split_by_day(df, seed=0, test_frac=0.2, val_frac=0.15)
+    day_of = out.sequence_id.str.split("_").str[1]
+    crossings = out.groupby(day_of)["split"].nunique()
+    assert (crossings == 1).all()
+    train_classes = set(out[out.split == "train"].target_object)
+    assert train_classes == {"curbstone", "pole", "woodenboard"}
+    assert set(out.split.unique()) >= {"train", "test"}

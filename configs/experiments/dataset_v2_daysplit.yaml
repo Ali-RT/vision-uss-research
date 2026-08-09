@@ -1,0 +1,45 @@
+# LEAKAGE AUDIT (reviewer P0): identical to dataset_v2 except the split unit
+# is the RECORDING DAY - no day (session) ever crosses train/val/test, so
+# repeated approaches to the same staged obstacle instance cannot leak.
+# auto_test_frac/val_frac act as global day-level fractions here.
+stage: dataset
+tag: v2daysplit
+
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true
+
+class_groups:
+  hose: low_other
+  step: low_other
+  cone: high_other
+  bollard: high_other
+  car: high_other
+  tree: high_other
+  bush: high_other
+  stonelarge: high_other
+  stonemiddle: high_other
+  cubestandard: high_other
+  ubarrier: high_other
+  fence: high_other
+
+class_ids:
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+  low_other: 6
+  high_other: 7
+
+holdout_objects: [cone]
+
+split:
+  group: day
+  gold_test_frac: 0.20
+  auto_test_frac: 0.15
+  val_frac: 0.15
+seed: 0

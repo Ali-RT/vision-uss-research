@@ -66,13 +66,64 @@ def force_test_for_objects(split_df: pd.DataFrame,
     return out
 
 
+def split_by_day(df: pd.DataFrame, seed: int = 0,
+                 test_frac: float = 0.15, val_frac: float = 0.15) -> pd.DataFrame:
+    """Leakage-safe grouped split: the assignment unit is the RECORDING DAY
+    (second token of sequence_id, YYYYMMDD). Repeated approaches to the same
+    staged obstacle instance happen within a session, so no day ever crosses
+    splits - a direct answer to near-duplicate leakage across sequence-level
+    splits. Greedy: shuffled days go to whichever split is furthest below its
+    target sequence count; a repair pass flips whole days to train for any
+    class that would otherwise have no training data (single-day classes stay
+    train-only and are reported by the caller's overview)."""
+    rng = random.Random(seed)
+    seq_info = (df.groupby("sequence_id")
+                .agg(target_object=("target_object", "first"),
+                     gold=("gold", "any")))
+    seq_info["day"] = [s.split("_")[1] for s in seq_info.index]
+    day_seqs = seq_info.groupby("day").groups
+
+    total = len(seq_info)
+    target = {"test": test_frac * total, "val": val_frac * total,
+              "train": (1 - test_frac - val_frac) * total}
+    count = {k: 0 for k in target}
+    day_split: dict[str, str] = {}
+    days = sorted(day_seqs)
+    rng.shuffle(days)
+    for day in days:
+        deficit = {k: target[k] - count[k] for k in target}
+        pick = max(deficit, key=lambda k: deficit[k] / max(target[k], 1))
+        day_split[day] = pick
+        count[pick] += len(day_seqs[day])
+
+    # repair: every class must train (unless it only ever appears on one day)
+    for obj, grp in seq_info.groupby("target_object"):
+        obj_days = grp["day"].unique()
+        if any(day_split[d] == "train" for d in obj_days):
+            continue
+        if len(obj_days) >= 2:
+            flip = max(obj_days, key=lambda d: (grp["day"] == d).sum())
+            day_split[flip] = "train"
+        else:
+            day_split[obj_days[0]] = "train"
+
+    out = df.copy()
+    out["split"] = [day_split[s.split("_")[1]] for s in out["sequence_id"]]
+    return out
+
+
 def split_by_sequence(df: pd.DataFrame, seed: int = 0,
                       gold_test_frac: float = 0.20,
                       auto_test_frac: float = 0.10,
-                      val_frac: float = 0.15) -> pd.DataFrame:
+                      val_frac: float = 0.15,
+                      group: str | None = None) -> pd.DataFrame:
     """Assign a 'split' column (train/val/test) per SEQUENCE, stratified by class.
     Test prefers gold (clicked) sequences; classes without gold fall back to
-    auto-labeled test sequences."""
+    auto-labeled test sequences. group="day" switches to the leakage-safe
+    day-grouped split (split_by_day)."""
+    if group == "day":
+        return split_by_day(df, seed=seed, test_frac=auto_test_frac,
+                            val_frac=val_frac)
     rng = random.Random(seed)
     seq_info = (df.groupby("sequence_id")
                 .agg(target_object=("target_object", "first"),
