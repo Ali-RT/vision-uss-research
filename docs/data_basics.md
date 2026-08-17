@@ -32,14 +32,35 @@ Sequences were staged and recorded on the FML project `PLAT_USS`
 | `CusReplay/<jobid>/<name>_PFDF4_DAQ_MAP_Classifier_Monitor_Normed.csv.xz` | **production height classifier monitor** (see below) | nb14/15 fusion; the USS baseline |
 | `extracts/*.dat.bz2`, `MDF4_DAT_LOG/*.log` | ADTF raw extracts + replay pre-check logs | not used |
 
-## Sensor
+## Corpus metadata (full inventory, 8,137 metadata jsons, 2026-08-11)
 
-Metadata tag `Sensor Type: 12x6.5` on the sample = Bosch USS generation
-naming (12 sensors on the vehicle, 6.5 = sensor variant/generation).
-Vehicle software `MKS_CP_1.195.1.6__SIP6.15.10_PRE2.2` = production parking
-stack build. Corpus-wide sensor-type distribution: run the scan cell in
-`docs/data_basics.md` -> "Sensor scan" (below) - the nb01 inventory did not
-capture this tag.
+Source: `inventory_metadata.csv` from nb01 (`paper/results/inventory/`).
+
+| field | distribution |
+|---|---|
+| **sensor type** | `12x6.5`: 8,133 (100.0%); `8x6.0_4x6.1`: 4. **One USS sensor generation.** |
+| **vehicles** (from seq id) | `XO2617` 7,374 (90.6%); `XN 8826` ~593 (7.3%, older naming scheme, mostly untagged sw); `S-063091` 147 (1.8%, Dec 2020); `XO7246` 23 |
+| **software build** (production stack) | `SIP6.16_PRE2.6...USS65` 4,370 (53.7%, May 2019 - Jan 2020); `MKS_CP_1.195.1.6__SIP6.15.10_PRE2.2` 3,028 (37.2%, Mar-Apr 2019); `SIP6_19_Final` 549 (6.7%, Apr 2020); `83` 147 (Dec 2020, S-063091); untagged 40 |
+| driving direction | forward 3,853 (47.4%); backward 3,693 (45.4%); untagged 591 (7.3% - the XN 8826 set) |
+| approach | central 53.6%; 45deg 23.3%; displaced 22.6% |
+| weather | sunny_dry 81.8%; rain_wet 13.1%; cloudy 2.2%; snow 1.5%; indoor 0.7%; garage 0.3% |
+| recording days | 100 distinct; 2019: 6,966 seqs, 2020: 1,160 |
+| speed | max-speed median 4.8 kph, p95 7.7 kph |
+| temperature | -4 to 35 C, median 13 C |
+| top scenes | NCAP_Dummy_Child 11.4%, curbstone 10.5%+4.0%, bush 7.9%+3.5%, cone 4.1%, pole 4.0%+3.2%, speed_bump 3.7%, vehicle edge/side 3.4%+3.3% |
+
+Sensor `12x6.5` = Bosch USS generation naming (12 sensors on the vehicle,
+6.5 = sensor variant/generation). Note for the paper: **one sensor
+generation, one dominant vehicle (91%), but THREE production-stack builds
+across 2019-2020** - the "production USS classifier" we score is the same
+product line at slightly different software versions. Weather is not only
+sunny: ~15% rain/snow/cloudy.
+
+## Sensor scan (superseded)
+
+nb01 now writes `inventory_metadata.csv` directly (commit 4610b77 +
+1c2af21 for nested tag names). The ad-hoc scan cell below is kept for
+reference only.
 
 ## What "CusReplay" is
 
