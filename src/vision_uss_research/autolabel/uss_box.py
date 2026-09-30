@@ -141,24 +141,15 @@ def pose_at(pose: dict, t: float) -> tuple[float, float, float]:
     return float(x), float(y), float(np.interp(t, ty, np.unwrap(np.radians(yaw))))
 
 
-def build_box(pose: dict, slot: dict, lateral: int = 0, size: str = "fixed",
-              timing: str = "final") -> tuple[list, tuple[float, float]] | None:
-    """One box, changing ONE thing at a time relative to v1.
+def face_geometry(pose: dict, slot: dict, lateral: int = 0, timing: str = "final"
+                  ) -> dict | None:
+    """Where the map object's reflecting face is, in world metres.
 
-    lateral: 0 = ignore the object's y offset (v1), +1 / -1 = add it with
-             that sign. The Map_Obj y-axis direction is NOT documented in the
-             prototype; three second-programme traces disagree on the sign, so both are
-             scored and the corpus decides.
-    size:    "fixed" = 0.75 x 1.75 m along ego heading (v1); "seg" = the map
-             object's P1-P2 segment (min length / fixed depth), which needs a
-             lateral sign.
-    timing:  "final" = final ego pose + final (or last non-zero) object
-             sample (v1); "sync" = the slot's last valid sample with the ego
-             pose interpolated to that timestamp.
-    Returns (corners, centre) or None."""
+    Returns {"p1", "p2", "centre", "yaw" (rad), "side" (+1 object ahead of the
+    reference point, -1 behind)} or None. See `build_box` for the arguments."""
     if timing == "final":
         x, y, yaw = (pose[k][1][-1] for k in ("x", "y", "yaw"))
-        yaw = np.radians(yaw)
+        yaw = float(np.radians(yaw))
         i = len(slot["p1x"]) - 1
         if slot["p1x"][i] == 0 and slot["p2x"][i] == 0:
             i = _last_valid(slot)
@@ -172,12 +163,51 @@ def build_box(pose: dict, slot: dict, lateral: int = 0, size: str = "fixed",
     sgn = float(lateral)
     p1 = vehicle_to_world(x, y, yaw, slot["p1x"][i] / 1000, sgn * slot["p1y"][i] / 1000)
     p2 = vehicle_to_world(x, y, yaw, slot["p2x"][i] / 1000, sgn * slot["p2y"][i] / 1000)
-    cx, cy = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+    mid_x = (slot["p1x"][i] + slot["p2x"][i]) / 2
+    return {"p1": p1, "p2": p2, "centre": ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2),
+            "yaw": yaw, "side": 1 if mid_x >= 0 else -1}
+
+
+def box_behind_face(face_centre, yaw: float, side: int, length: float, width: float,
+                    depth_shift: bool = True) -> tuple[list, tuple[float, float]]:
+    """Ego-aligned `length` x `width` box whose NEAR edge sits on the reflecting
+    face (depth_shift) or centred on it (v1). The USS sees the object's near
+    face, so a box centred there is half a length too close to the car."""
+    cx, cy = face_centre
+    if depth_shift:
+        cx += side * length / 2 * np.cos(yaw)
+        cy += side * length / 2 * np.sin(yaw)
+    return oriented_box(cx, cy, yaw, length, width), (cx, cy)
+
+
+def build_box(pose: dict, slot: dict, lateral: int = 0, size: str = "fixed",
+              timing: str = "final", depth_shift: bool = False
+              ) -> tuple[list, tuple[float, float]] | None:
+    """One box, changing ONE thing at a time relative to v1.
+
+    lateral: 0 = ignore the object's y offset (v1), +1 / -1 = add it with
+             that sign. The prototype never documented the Map_Obj y axis;
+             the al_eval_v1 smoke run (172 sequences) settled it: +1 (y left)
+             halves the centroid error, -1 makes it worse.
+    size:    "fixed" = 0.75 x 1.75 m along ego heading (v1); "seg" = the map
+             object's P1-P2 segment (min length / fixed depth), which needs a
+             lateral sign.
+    timing:  "final" = final ego pose + final (or last non-zero) object
+             sample (v1); "sync" = the slot's last valid sample with the ego
+             pose interpolated to that timestamp.
+    depth_shift: move the fixed box back so its near edge is on the face.
+    Returns (corners, centre) or None."""
+    f = face_geometry(pose, slot, lateral, timing)
+    if f is None:
+        return None
     if size == "fixed":
-        return oriented_box(cx, cy, yaw, V1_BOX_LENGTH_M, V1_BOX_WIDTH_M), (cx, cy)
-    seg = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
-    heading = np.arctan2(p2[1] - p1[1], p2[0] - p1[0]) if seg > 0.05 else yaw + np.pi / 2
-    return oriented_box(cx, cy, heading, max(seg, SEG_MIN_LENGTH_M), SEG_DEPTH_M), (cx, cy)
+        return box_behind_face(f["centre"], f["yaw"], f["side"],
+                               V1_BOX_LENGTH_M, V1_BOX_WIDTH_M, depth_shift)
+    (x1, y1), (x2, y2) = f["p1"], f["p2"]
+    seg = float(np.hypot(x2 - x1, y2 - y1))
+    heading = np.arctan2(y2 - y1, x2 - x1) if seg > 0.05 else f["yaw"] + np.pi / 2
+    return (oriented_box(*f["centre"], heading, max(seg, SEG_MIN_LENGTH_M), SEG_DEPTH_M),
+            f["centre"])
 
 
 # name -> (slot selector, build_box kwargs). "v1" must stay the as-run prototype.
@@ -189,7 +219,11 @@ VARIANTS = {
     "sel2":    ("v2", {}),
     "seg_pos": ("v1", {"lateral": +1, "size": "seg"}),
     "seg_neg": ("v1", {"lateral": -1, "size": "seg"}),
+    "depth":   ("v1", {"lateral": +1, "depth_shift": True}),   # lat_pos + depth shift
 }
+# Face geometry stored per row (lat_pos convention) so size priors can be
+# scored in the notebook without re-reading the MF4.
+FACE_LATERAL = +1
 FIXED_SIZE_VARIANTS = [k for k, (_, kw) in VARIANTS.items() if kw.get("size", "fixed") == "fixed"]
 
 
@@ -245,6 +279,23 @@ def oracle_size_iou(gt, centre) -> float:
     return polygon_iou(gt, moved)
 
 
+def extents_along(poly, heading: float) -> tuple[float, float]:
+    """Polygon extent along `heading` and across it (m)."""
+    p = np.asarray(poly, dtype=float)
+    u = np.array([np.cos(heading), np.sin(heading)])
+    v = np.array([-u[1], u[0]])
+    a, b = p @ u, p @ v
+    return float(a.max() - a.min()), float(b.max() - b.min())
+
+
+def polygon_to_str(poly) -> str:
+    return ";".join(f"{x:.3f} {y:.3f}" for x, y in poly)
+
+
+def polygon_from_str(s: str) -> list[tuple[float, float]]:
+    return [tuple(map(float, v.split())) for v in str(s).split(";") if v.strip()]
+
+
 def evaluate_sequence(mf4_path: Path, label_csv: Path) -> dict:
     """One results row: every method's box vs the (first) human target.
     Never raises - failures land in `error`."""
@@ -288,6 +339,14 @@ def evaluate_sequence(mf4_path: Path, label_csv: Path) -> dict:
             if name in FIXED_SIZE_VARIANTS:
                 row[f"{name}_oracle_size_iou"] = round(
                     oracle_size_iou(gt["polygon"], centre), 4)
+        if chosen["v1"] is not None:
+            f = face_geometry(sig["pose"], sig["slots"][chosen["v1"]], FACE_LATERAL)
+            if f is not None:
+                length, width = extents_along(gt["polygon"], f["yaw"])
+                row.update(face_cx=round(f["centre"][0], 4), face_cy=round(f["centre"][1], 4),
+                           ego_yaw_rad=round(f["yaw"], 6), obj_side=f["side"],
+                           gt_len_along_m=round(length, 4), gt_wid_across_m=round(width, 4))
+        row["gt_polygon"] = polygon_to_str(gt["polygon"])
         if chosen["v1"] is None and chosen["v2"] is None:
             row["error"] = "no_object_selected"
     except Exception as e:

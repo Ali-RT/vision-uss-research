@@ -58,3 +58,28 @@ shape on a variant's centre: IoU with localisation error only.
    footprint size (first 4-trace signal: a wall scores v1 IoU 0.34 but
    oracle-size 0.80 - a size failure, not a localisation one).
 3. Which fixes help, and which lateral sign is right.
+
+## Results log
+
+**`al_eval_v1` smoke (2026-09-30, 300 sampled sequences; 195 scored, 172
+single-target).** Skips: 89 no MF4/label, 16 no target polygon.
+- v1 median IoU: low 0.381 (CI 0.23-0.58, n=41, 32 of them curbstones),
+  high 0.249 (0.21-0.27, n=131). **The draft's height gap reverses on this
+  corpus.** v1 IoU peaks where the human box area is near the 1.31 m² template
+  and falls on both sides - a template-fit artefact, not a height effect.
+- Lateral sign: `lat_pos` (+1, y left) cuts the median centroid error
+  0.50 -> 0.27 m (high 0.51 -> 0.26) and adds +0.024 mean IoU (CI 0.013-0.036);
+  `lat_neg` is worse. `sync` and `sel2` change nothing; `seg_*` boxes lose
+  ~0.2 IoU (the P1-P2 segment is the reflecting face, not the footprint).
+- Small high objects (pole, dummychild) fail on localisation as well as size
+  (oracle-size IoU 0.13 / 0.09); cars fail on size (8 m² vs 1.31 m² template).
+
+**Depth shift (4 hand-checked traces):** moving the box so its near edge sits
+on the map object HURTS on all four - the map object already sits near the
+human box centre (box802: 0.04 m). Likely the Label V2 polygons were drawn over
+the USS map view, so the "ground truth" is human agreement on the USS map, not
+a physical measurement. **Must be confirmed with the labelling team and stated
+in the paper.**
+
+**`al_eval_v2`** adds the depth-shift variant, stored face geometry, approach
+tags, and cross-fitted class-size priors (`glob`, `cls`, `cls_depth`).

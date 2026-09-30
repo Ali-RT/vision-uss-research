@@ -6,9 +6,11 @@ from vision_uss_research.autolabel.geometry import (box_metrics, centroid,
                                                     nn_corner_error, oriented_box,
                                                     polygon_area, polygon_iou,
                                                     vehicle_to_world)
-from vision_uss_research.autolabel.uss_box import (box_v1, build_box,
+from vision_uss_research.autolabel.uss_box import (box_behind_face, box_v1,
+                                                   build_box, extents_along,
                                                    oracle_size_iou,
                                                    parse_label_targets,
+                                                   polygon_from_str, polygon_to_str,
                                                    select_slot_v1, select_slot_v2)
 
 SQUARE = [(0, 0), (1, 0), (1, 1), (0, 1)]
@@ -126,3 +128,23 @@ def test_parse_label_targets_keeps_low_high_polygons(tmp_path):
 def test_box_metrics_keys():
     m = box_metrics(SQUARE, SQUARE)
     assert m["iou"] == 1.0 and m["centroid_err_m"] == 0.0 and m["pred_area_m2"] == 1.0
+
+
+def test_depth_shift_puts_near_edge_on_face():
+    # heading +90deg, object ahead: box centre moves +length/2 along +y
+    corners, (cx, cy) = box_behind_face((0.0, 10.0), np.pi / 2, +1, 2.0, 1.0)
+    assert (cx, cy) == pytest.approx((0.0, 11.0))
+    assert min(y for _, y in corners) == pytest.approx(10.0)     # near edge on the face
+    # object behind the reference point: shift the other way
+    _, (_, cy2) = box_behind_face((0.0, -10.0), np.pi / 2, -1, 2.0, 1.0)
+    assert cy2 == pytest.approx(-11.0)
+    slot = _slot([6000, 5000, 4250, 0])
+    shifted = build_box(POSE, slot, lateral=+1, depth_shift=True)[1]
+    assert shifted[1] == pytest.approx(204.25 + 0.75 / 2)
+
+
+def test_extents_and_polygon_roundtrip():
+    b = oriented_box(0.0, 0.0, 0.4, 3.0, 1.0)
+    assert extents_along(b, 0.4) == pytest.approx((3.0, 1.0))
+    assert extents_along(b, 0.4 + np.pi / 2) == pytest.approx((1.0, 3.0))
+    assert polygon_from_str(polygon_to_str(SQUARE)) == [tuple(map(float, v)) for v in SQUARE]
