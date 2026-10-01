@@ -7,3 +7,7 @@ accelerate>=1.0
 ultralytics>=8.3
 tqdm>=4.66
 pyyaml>=6.0
+# MF4 reader (notebooks 10/11/16). canmatrix 1.3.0 (2026-10-01) breaks
+# `import asammdf` with a TypeError in asammdf/blocks/types.py - keep pinned.
+asammdf==8.8.27
+canmatrix==1.2
