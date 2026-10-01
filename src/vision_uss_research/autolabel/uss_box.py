@@ -299,9 +299,12 @@ def polygon_from_str(s: str) -> list[tuple[float, float]]:
 def evaluate_sequence(mf4_path: Path, label_csv: Path) -> dict:
     """One results row: every method's box vs the (first) human target.
     Never raises - failures land in `error`."""
-    from asammdf import MDF
-
     row: dict = {"error": ""}
+    try:
+        from asammdf import MDF
+    except Exception as e:   # e.g. a broken dependency release - not a data problem
+        row["error"] = f"import:{type(e).__name__}:{e}"
+        return row
     try:
         targets = parse_label_targets(label_csv)
     except Exception as e:
