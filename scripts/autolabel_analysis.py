@@ -200,6 +200,30 @@ def main(run_dir: Path):
     strat["area_q"] = strat["area_q"].astype(str)
     strat.to_csv(out / "height_vs_size.csv", index=False)
 
+    # ---- 5. review policy: auto-accept a (class, approach) group when its
+    # cross-fitted training share of v2 boxes with IoU >= 0.5 reaches t
+    ev["_good"] = ev["cls_appr_iou"] >= 0.5
+    ev["_grp"] = ev["obj"] + "|" + ev["approach"]
+    pol = []
+    for t in (0.5, 0.6, 0.7):
+        acc = pd.Series(False, index=ev.index)
+        for k in range(K_FOLDS):
+            tr, te = ev[ev["fold"] != k], ev[ev["fold"] == k]
+            rate, n = tr.groupby("_grp")["_good"].mean(), tr.groupby("_grp").size()
+            ok = set(rate[(rate >= t) & (n >= 20)].index)
+            acc[te.index] = te["_grp"].isin(ok)
+        a = ev[acc]
+        pol.append({"threshold": t, "accepted_share": round(acc.mean(), 4),
+                    "accepted_iou>=0.5": round(a["_good"].mean(), 4),
+                    "accepted_iou_med": round(a["cls_appr_iou"].median(), 3),
+                    "rest_iou>=0.5": round(ev.loc[~acc, "_good"].mean(), 4)})
+    pol = pd.DataFrame(pol)
+    pol.to_csv(out / "review_policy.csv", index=False)
+    grp = (ev.groupby(["obj", "approach"]).agg(n=("_good", "size"), good=("_good", "mean"),
+                                              iou_med=("cls_appr_iou", "median"))
+             .round(3).reset_index().sort_values("good", ascending=False))
+    grp.to_csv(out / "by_object_approach.csv", index=False)
+
     ev.drop(columns=[c for c in ev.columns if c.startswith("_") and c != "_gt_axis"]).to_csv(
         out / "eval_enriched.csv", index=False)
     summary = {"n_single_target": int(len(ev)),
@@ -212,6 +236,7 @@ def main(run_dir: Path):
         print("\nBY OBJECT\n", objs.to_string(index=False))
         print("\nBY APPROACH\n", appr.to_string(index=False))
         print("\nHEIGHT vs SIZE\n", strat.to_string(index=False))
+        print("\nREVIEW POLICY\n", pol.to_string(index=False))
 
 
 if __name__ == "__main__":
