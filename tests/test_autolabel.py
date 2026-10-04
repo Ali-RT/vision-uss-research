@@ -148,3 +148,37 @@ def test_extents_and_polygon_roundtrip():
     assert extents_along(b, 0.4) == pytest.approx((3.0, 1.0))
     assert extents_along(b, 0.4 + np.pi / 2) == pytest.approx((1.0, 3.0))
     assert polygon_from_str(polygon_to_str(SQUARE)) == [tuple(map(float, v)) for v in SQUARE]
+
+
+def _prior_rows():
+    import pandas as pd
+    from vision_uss_research.autolabel.uss_box import polygon_to_str
+    rows = []
+    for i in range(12):
+        # ego at origin heading +x; face 3 m ahead; human box 1 m further, 2 x 1 m
+        gt = oriented_box(4.0, 0.0, 0.0, 2.0, 1.0)
+        rows.append({"sequence_id": f"s{i}", "obj": "car" if i % 2 else "pole",
+                     "face_cx": 3.0, "face_cy": 0.0, "ego_yaw_rad": 0.0, "obj_side": 1,
+                     "gt_polygon": polygon_to_str(gt), "gt_len_along_m": 2.0,
+                     "gt_wid_across_m": 1.0})
+    return pd.DataFrame(rows)
+
+
+def test_priors_learn_offset_and_size():
+    from vision_uss_research.autolabel.priors import add_offsets, fit_priors, prior_box
+    df = add_offsets(_prior_rows())
+    assert df["off_along_m"].tolist() == pytest.approx([1.0] * 12)
+    corners, used = prior_box(df.iloc[0], fit_priors(df, ["obj"]))
+    assert used and polygon_iou(corners, corners) == 1.0
+    assert centroid(corners) == pytest.approx((4.0, 0.0))
+    # without the offset the box stays on the face
+    corners2, _ = prior_box(df.iloc[0], fit_priors(df, ["obj"], use_offset=False))
+    assert centroid(corners2) == pytest.approx((3.0, 0.0))
+
+
+def test_cross_fit_never_uses_own_fold_and_falls_back():
+    from vision_uss_research.autolabel.priors import cross_fit
+    df = _prior_rows()
+    out = cross_fit(df, ["obj"], k=3, min_n=100, prefix="p")   # min_n too high -> global
+    assert out["p_group_prior"].eq(0).all()
+    assert out["p_iou"].dropna().eq(1.0).all()

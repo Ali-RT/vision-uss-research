@@ -20,8 +20,8 @@ import pandas as pd
 import yaml
 
 from vision_uss_research.autolabel.geometry import box_metrics, centroid, oriented_box
-from vision_uss_research.autolabel.uss_box import (box_behind_face, convex_hull,
-                                                   polygon_from_str)
+from vision_uss_research.autolabel.priors import add_offsets, cross_fit
+from vision_uss_research.autolabel.uss_box import convex_hull, polygon_from_str
 
 REPO = Path(__file__).resolve().parents[1]
 K_FOLDS, MIN_CLASS_TRAIN, N_BOOT, SEED, MIN_OBJ_N = 5, 5, 2000, 0, 30
@@ -88,9 +88,19 @@ def main(run_dir: Path):
     ev = d[(d["error"] == "") & d["v1_iou"].notna() & (d["n_targets"] == 1)
            & d["face_cx"].notna()].copy().reset_index(drop=True)
 
-    # ---- cross-fitted size priors (same recipe as notebook 16 section 5) + diagnostics
+    # ---- v2 priors (library code, 5-fold cross-fitted) - the variants in the paper
+    ev = add_offsets(ev)
     ev["fold"] = ev["sequence_id"].map(
         lambda s: int(hashlib.md5(s.encode()).hexdigest(), 16) % K_FOLDS)
+    ev["_all"] = "all"
+    for prefix, keys, off in (("glob", ["_all"], False), ("cls", ["obj"], False),
+                              ("cls_off", ["obj"], True),
+                              ("cls_appr", ["obj", "approach"], True)):
+        ev = ev.join(cross_fit(ev, keys, use_offset=off, k=K_FOLDS,
+                               min_n=MIN_CLASS_TRAIN, prefix=prefix))
+    ev["cls_prior_used"] = ev["cls_group_prior"]
+
+    # ---- diagnostics: human box orientation, oracle orientation / centre
     dims = ["gt_len_along_m", "gt_wid_across_m"]
     rows = []
     for k in range(K_FOLDS):
@@ -100,32 +110,20 @@ def main(run_dir: Path):
         for i, r in test.iterrows():
             use = r["obj"] in cls_med.index and cls_n[r["obj"]] >= MIN_CLASS_TRAIN
             L, W = (cls_med.loc[r["obj"]] if use else glob).to_numpy(float)
-            gL, gW = glob.to_numpy(float)
             gt = polygon_from_str(r["gt_polygon"])
-            face = (r["face_cx"], r["face_cy"])
-            res = {"idx": i, "cls_prior_used": int(use)}
-            for name, (bl, bw) in (("glob", (gL, gW)), ("cls", (L, W))):
-                c, _ = box_behind_face(face, r["ego_yaw_rad"], int(r["obj_side"]), bl, bw,
-                                       depth_shift=False)
-                res.update({f"{name}_{m}": v for m, v in box_metrics(c, gt).items()})
-            # orientation diagnostics: the human box's own axis vs ego heading
+            res = {"idx": i}
             rect = min_area_rect(gt)
             if rect is not None:
                 _, ang, rl, rw = rect
                 res["gt_axis_vs_ego_deg"] = angle_diff_deg(ang, r["ego_yaw_rad"])
                 res["gt_elongation"] = rl / max(rw, 1e-6)
-                # oracle orientation: class size along/across the GT axes, at the
-                # predicted centre. Class size is measured along ego heading, so
-                # re-measure it along the GT axis from training rect dims instead.
                 res["_rect_len"], res["_rect_wid"] = rl, rw
                 res["_gt_axis"] = ang
-            # oracle centre: class size, ego heading, at the GT centroid
+            # oracle centre: class size, ego heading, at the human box centroid
             gc = centroid(gt)
             c = oriented_box(gc[0], gc[1], r["ego_yaw_rad"], L, W)
             res["cls_oraclecentre_iou"] = box_metrics(c, gt)["iou"]
             rows.append(res)
-        # object-aligned class box: per-class median of min-area-rect dims,
-        # oriented along the GT axis (orientation oracle) at the predicted centre
     pri = pd.DataFrame(rows).set_index("idx")
     ev = ev.join(pri)
     rect_rows = []
@@ -145,7 +143,7 @@ def main(run_dir: Path):
     ev = ev.join(pd.DataFrame(rect_rows).set_index("idx"))
 
     # ---- 1. ladder with CIs
-    ladder_vars = ["v1", "lat_pos", "depth", "glob", "cls"]
+    ladder_vars = ["v1", "lat_pos", "depth", "glob", "cls", "cls_off", "cls_appr"]
     diag_vars = ["cls_gtaxis", "cls_oraclecentre", "lat_pos_oracle_size"]
     lad = []
     for v in ladder_vars + diag_vars:
@@ -172,8 +170,9 @@ def main(run_dir: Path):
                      "elongation_med": round(g["gt_elongation"].median(), 2),
                      "axis_vs_ego_med_deg": round(g["gt_axis_vs_ego_deg"].median(), 1),
                      **{f"{v}_iou": round(g[f"{v}_iou"].median(), 3)
-                        for v in ["v1", "lat_pos", "cls", "cls_gtaxis", "cls_oraclecentre"]},
-                     "cls_iou_ci": boot_ci(g["cls_iou"]),
+                        for v in ["v1", "lat_pos", "cls", "cls_off", "cls_appr", "cls_gtaxis",
+                                  "cls_oraclecentre"]},
+                     "cls_appr_iou_ci": boot_ci(g["cls_appr_iou"]),
                      "lat_centroid_m": round(g["lat_pos_centroid_err_m"].median(), 3)})
     objs = pd.DataFrame(objs).sort_values(["height_bin", "n"], ascending=[True, False])
     objs.to_csv(out / "by_object.csv", index=False)
@@ -182,6 +181,7 @@ def main(run_dir: Path):
     appr = (ev.groupby(["approach", "height_bin"])
               .agg(n=("v1_iou", "size"), v1=("v1_iou", "median"),
                    lat_pos=("lat_pos_iou", "median"), cls=("cls_iou", "median"),
+                   cls_appr=("cls_appr_iou", "median"),
                    cls_gtaxis=("cls_gtaxis_iou", "median"),
                    v1_centroid=("v1_centroid_err_m", "median"),
                    lat_centroid=("lat_pos_centroid_err_m", "median"),
@@ -193,13 +193,14 @@ def main(run_dir: Path):
     ev["area_q"] = pd.qcut(ev["gt_area_m2"], 5, duplicates="drop")
     strat = (ev.groupby(["area_q", "height_bin"], observed=True)
                .agg(n=("v1_iou", "size"), v1=("v1_iou", "median"), cls=("cls_iou", "median"),
+                    cls_appr=("cls_appr_iou", "median"),
                     lat_oracle=("lat_pos_oracle_size_iou", "median"),
                     lat_centroid=("lat_pos_centroid_err_m", "median"))
                .round(3).reset_index())
     strat["area_q"] = strat["area_q"].astype(str)
     strat.to_csv(out / "height_vs_size.csv", index=False)
 
-    ev.drop(columns=[c for c in ev.columns if c.startswith("_")]).to_csv(
+    ev.drop(columns=[c for c in ev.columns if c.startswith("_") and c != "_gt_axis"]).to_csv(
         out / "eval_enriched.csv", index=False)
     summary = {"n_single_target": int(len(ev)),
                "by_height": ev["height_bin"].value_counts().to_dict(),
