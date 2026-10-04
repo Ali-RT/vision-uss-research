@@ -83,3 +83,29 @@ in the paper.**
 
 **`al_eval_v2`** adds the depth-shift variant, stored face geometry, approach
 tags, and cross-fitted class-size priors (`glob`, `cls`, `cls_depth`).
+
+**`al_eval_v2` full run (2026-10-04, git f28452f): 8,216 folders, 5,595 scored,
+4,991 single-target (3,960 high / 1,031 low).** Offline analysis:
+`PYTHONPATH=src python scripts/autolabel_analysis.py outputs/autolabel/al_eval_v2`
+(size / offset priors 5-fold cross-fitted by sequence-id hash).
+
+| variant | median IoU all (95% CI) | high | low | IoU>=0.5 |
+|---|---|---|---|---|
+| v1 (prototype as run) | 0.238 (0.233-0.244) | 0.233 | 0.307 | 15.7% |
+| + lateral offset | 0.265 (0.261-0.269) | 0.264 | 0.301 | 17.4% |
+| + class size prior (`cls`) | 0.405 (0.395-0.415) | 0.427 | 0.315 | 35.7% |
+| + class placement offset | 0.434 (0.424-0.445) | 0.463 | 0.332 | 40.0% |
+| + class x approach offset/size | 0.468 (0.458-0.478) | 0.482 | 0.321 | 45.5% |
+
+Findings:
+- The prototype shows no "high objects label better" effect: v1 low 0.307
+  (0.27-0.36) vs high 0.233 (0.229-0.238).
+- After the fixes the low median lags, but it is ONE class in ONE geometry:
+  curbstone (820 of 1,031 low) at 45 deg approaches (IoU ~0.15-0.17, centroid
+  error 1.1-1.3 m - the USS map sees the nearest point of a long, oblique curb).
+  Other low objects are among the best: woodenboard 0.64, speedbump 0.63-0.66;
+  central low 0.64 with the approach-aware prior.
+- Placement causes: lateral offset (displaced high: centroid 0.76 -> 0.26 m),
+  object depth for cars (GT centre 1.54 m beyond the map object; car IoU
+  0.14 -> 0.43 with the class offset). Depth shift for ALL classes hurts.
+- Remaining-gap oracles (cls size): true orientation 0.477, true centre 0.562.
