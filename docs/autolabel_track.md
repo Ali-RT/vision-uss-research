@@ -7,7 +7,7 @@ all outputs of this track live under `outputs/autolabel/al_*` (Drive:
 
 ## Origin
 
-A Bosch prototype (M. K. Uludag, Aug 2024, `helpers_mf4.py` / `Mass_tester.py`,
+An internal Bosch prototype (Aug 2024, `helpers_mf4.py` / `Mass_tester.py`,
 mdfreader) generated BEV boxes for height-classification traces of a second
 vehicle programme and compared them to human labels. The accompanying report
 describes echo-level trigonometry; **the source does something simpler**:

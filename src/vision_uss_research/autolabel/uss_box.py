@@ -1,6 +1,6 @@
 """USS-geometry auto-labeler: a BEV box for the staged target from the MF4.
 
-Port of the Bosch prototype (M. K. Uludag, Aug 2024, `helpers_mf4.py`,
+Port of the internal Bosch prototype (Aug 2024, `helpers_mf4.py`,
 mdfreader) to asammdf, plus fixed variants, so both can be scored against the
 human Label V2 polygons.
 
