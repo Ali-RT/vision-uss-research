@@ -257,6 +257,38 @@ def table_approach(appr: pd.DataFrame, path: Path):
     path.write_text("\n".join(lines) + "\n")
 
 
+def table_classes(ev: pd.DataFrame, path: Path, min_n: int = 30):
+    """Evaluation set composition: class x height bin x approach geometry."""
+    ev = ev.copy()
+    ev["approach"] = ev["approach"].fillna("untagged")
+    t = (ev.groupby(["height_bin", "obj"])
+           .agg(n=("v1_iou", "size"), area=("gt_area_m2", "median"),
+                central=("approach", lambda a: int((a == "central").sum())),
+                displaced=("approach", lambda a: int((a == "displaced").sum())),
+                deg45=("approach", lambda a: int((a == "45deg").sum())),
+                untagged=("approach", lambda a: int((a == "untagged").sum())))
+           .reset_index())
+    small = t[t["n"] < min_n]
+    t = t[t["n"] >= min_n].sort_values(["height_bin", "n"], ascending=[True, False])
+    lines = [r"\begin{tabular}{@{}llrrrrrr@{}}", r"\toprule",
+             r"Class & Height & $n$ & area (m$^2$) & central & displ. & 45$^\circ$ & untagged \\",
+             r"\midrule"]
+    for _, r in t.iterrows():
+        lines.append(f"{OBJ_LABEL.get(r['obj'], r['obj'])} & {r['height_bin']} & {r['n']} & "
+                     f"{r['area']:.2f} & {r['central']} & {r['displaced']} & {r['deg45']} & "
+                     f"{r['untagged']} \\\\")
+    if len(small):
+        lines.append(f"other ({len(small)} classes) & -- & {int(small['n'].sum())} & -- & "
+                     f"{int(small['central'].sum())} & {int(small['displaced'].sum())} & "
+                     f"{int(small['deg45'].sum())} & {int(small['untagged'].sum())} \\\\")
+    tot = ev["approach"].value_counts()
+    lines += [r"\midrule",
+              f"total & & {len(ev)} & & {tot.get('central', 0)} & {tot.get('displaced', 0)} & "
+              f"{tot.get('45deg', 0)} & {tot.get('untagged', 0)} \\\\",
+              r"\bottomrule", r"\end{tabular}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
 def main(run_dir: Path, out_dir: Path):
     a = run_dir / "analysis"
     figs, tabs = out_dir / "figures", out_dir / "tables"
@@ -272,6 +304,7 @@ def main(run_dir: Path, out_dir: Path):
     fig_examples(ev, figs / "fig_examples.pdf")
     table_ladder(lad, tabs / "tab_ladder.tex")
     table_approach(appr, tabs / "tab_approach.tex")
+    table_classes(ev, tabs / "tab_classes.tex")
     print("wrote", sorted(p.name for p in figs.iterdir()), sorted(p.name for p in tabs.iterdir()))
 
 
