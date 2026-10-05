@@ -76,10 +76,19 @@ single-target).** Skips: 89 no MF4/label, 16 no target polygon.
 
 **Depth shift (4 hand-checked traces):** moving the box so its near edge sits
 on the map object HURTS on all four - the map object already sits near the
-human box centre (box802: 0.04 m). Likely the Label V2 polygons were drawn over
-the USS map view, so the "ground truth" is human agreement on the USS map, not
-a physical measurement. **Must be confirmed with the labelling team and stated
-in the paper.**
+human box centre (box802: 0.04 m).
+
+**Labelling protocol (answered 2026-10-05 by a colleague):** PLAT_USS polygons
+were placed with the help of the synchronized reference webcam video (true for
+past programmes in general). The second programme (Gravity/"Lucid") recorded no
+video; its labels were likely estimated from the USS map view plus known object
+dimensions (its `*_psol_map.png` tool screenshots show a map-only view). So
+PLAT_USS ground truth = camera-assisted human estimates with a generous margin
+(75 mm pole -> ~1.2 x 0.5 m box), not surveyed positions. The depth-shift
+result is physical, not a map-view artefact: thin objects reflect near their
+centre; only cars need an offset (1.54 m). Within-class box size is fairly
+stable (relative IQR of area 0.33-0.60 for 11 of 13 classes vs 1.68 overall),
+which the class size prior exploits.
 
 **`al_eval_v2`** adds the depth-shift variant, stored face geometry, approach
 tags, and cross-fitted class-size priors (`glob`, `cls`, `cls_depth`).
