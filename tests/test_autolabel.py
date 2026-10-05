@@ -191,3 +191,13 @@ def test_recording_day_and_day_folds_keep_days_together():
     df["sequence_id"] = [f"{i}_2019030{i % 3}_x" for i in range(len(df))]
     out = cross_fit(df, ["obj"], k=3, min_n=1, prefix="d", fold_by="day")
     assert out["d_iou"].notna().all()
+
+
+def test_nomap_baseline_places_box_from_ego_pose():
+    from vision_uss_research.autolabel.priors import add_ego_offsets, cross_fit_nomap
+    df = _prior_rows()
+    df["ego_x_m"], df["ego_y_m"], df["driving_direction"] = 0.0, 0.0, "forward"
+    df["sequence_id"] = [f"{i}_2019030{i % 3}_x" for i in range(len(df))]
+    assert add_ego_offsets(df)["ego_off_along_m"].tolist() == pytest.approx([4.0] * 12)
+    out = cross_fit_nomap(df, ["obj", "driving_direction"], k=3, min_n=1, prefix="n")
+    assert out["n_iou"].eq(1.0).all()

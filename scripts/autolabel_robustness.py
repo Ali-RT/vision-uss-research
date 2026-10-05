@@ -23,7 +23,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from vision_uss_research.autolabel.priors import add_offsets, cross_fit, recording_day
+from vision_uss_research.autolabel.priors import (add_offsets, cross_fit, cross_fit_nomap,
+                                                  recording_day)
 
 REPO = Path(__file__).resolve().parents[1]
 N_BOOT, SEED, K = 1000, 0, 5
@@ -137,6 +138,28 @@ def main(run_dir: Path):
                         "iou>=0.5": round((g[f"{v}_iou"] >= 0.5).mean(), 3)})
     sel = pd.DataFrame(sel)
     sel.to_csv(out / "robustness_selection.csv", index=False)
+
+    # ---- 5. no-map baseline (needs ego_x_m / ego_y_m: al_eval_v3 or later)
+    if "ego_x_m" in single and single["ego_x_m"].notna().any():
+        nm = single.dropna(subset=["ego_x_m"]).copy()
+        nm["driving_direction"] = nm["driving_direction"].fillna("").replace("", "unknown")
+        nm = nm.join(cross_fit_nomap(nm, ["obj", "driving_direction"], k=K, prefix="nomap_cls"))
+        nm = nm.join(cross_fit_nomap(nm, ["obj", "approach", "driving_direction"], k=K,
+                                     prefix="nomap_appr"))
+        rows = []
+        for v in ("cls_off_day", "nomap_cls", "cls_appr_day", "nomap_appr"):
+            for hb in ("all", "high", "low"):
+                g = nm if hb == "all" else nm[nm["height_bin"] == hb]
+                rows.append({"variant": v, "subset": hb, "n": len(g),
+                             "iou_med": round(g[f"{v}_iou"].median(), 3),
+                             "iou_med_day_ci": day_boot(g, lambda d, c=f"{v}_iou": d[c].median()),
+                             "iou>=0.5": round((g[f"{v}_iou"] >= 0.5).mean(), 3),
+                             "centroid_med_m": round(g[f"{v}_centroid_err_m"].median(), 3)})
+        nomap = pd.DataFrame(rows)
+        nomap.to_csv(out / "robustness_nomap.csv", index=False)
+        print("\nNO-MAP BASELINE (same day-grouped folds)\n", nomap.to_string(index=False))
+    else:
+        print("\nno-map baseline skipped: results lack ego_x_m (rerun notebook 16 as al_eval_v3)")
 
     single.drop(columns=[c for c in single.columns if c.startswith("_")]).to_csv(
         out / "eval_robust.csv", index=False)

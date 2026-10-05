@@ -24,6 +24,8 @@ from vision_uss_research.autolabel.geometry import box_metrics, centroid, orient
 from vision_uss_research.autolabel.uss_box import polygon_from_str
 
 PRIOR_COLS = ["off_along_m", "off_across_m", "gt_len_along_m", "gt_wid_across_m"]
+# No-map baseline: offset of the human box centre from the final EGO pose
+NOMAP_COLS = ["ego_off_along_m", "ego_off_across_m", "gt_len_along_m", "gt_wid_across_m"]
 
 
 def add_offsets(df: pd.DataFrame) -> pd.DataFrame:
@@ -92,6 +94,57 @@ def cross_fit(df: pd.DataFrame, keys: list[str], use_offset: bool = True,
         priors = fit_priors(df[folds != f], keys, use_offset, min_n)
         for i, row in df[folds == f].iterrows():
             corners, used = prior_box(row, priors)
+            m = box_metrics(corners, polygon_from_str(row["gt_polygon"]))
+            out.append({"_i": i, f"{prefix}_group_prior": int(used),
+                        **{f"{prefix}_{name}": v for name, v in m.items()}})
+    return pd.DataFrame(out).set_index("_i").reindex(df.index)
+
+
+# ------------------------------------------------------------------ no-map baseline
+
+def add_ego_offsets(df: pd.DataFrame) -> pd.DataFrame:
+    """Human box centre relative to the final ego pose, in the ego frame
+    (unsigned: the driving direction is a grouping key instead)."""
+    df = df.copy()
+    gc = np.array([centroid(polygon_from_str(p)) for p in df["gt_polygon"]])
+    dx, dy = gc[:, 0] - df["ego_x_m"].to_numpy(), gc[:, 1] - df["ego_y_m"].to_numpy()
+    c, s = np.cos(df["ego_yaw_rad"].to_numpy()), np.sin(df["ego_yaw_rad"].to_numpy())
+    df["ego_off_along_m"] = dx * c + dy * s
+    df["ego_off_across_m"] = -dx * s + dy * c
+    return df
+
+
+def nomap_box(row, priors: dict) -> tuple[list, bool]:
+    """Box placed from the final ego pose with the group's median ego offset
+    and size - no USS map information at all."""
+    keys = priors["keys"]
+    key = tuple(row[k] for k in keys) if len(keys) > 1 else row[keys[0]]
+    use = key in priors["group"].index and priors["n"][key] >= priors["min_n"]
+    st = priors["group"].loc[key] if use else priors["global"]
+    yaw = float(row["ego_yaw_rad"])
+    a, b = float(st["ego_off_along_m"]), float(st["ego_off_across_m"])
+    cx = row["ego_x_m"] + a * np.cos(yaw) - b * np.sin(yaw)
+    cy = row["ego_y_m"] + a * np.sin(yaw) + b * np.cos(yaw)
+    return oriented_box(cx, cy, yaw, float(st["gt_len_along_m"]),
+                        float(st["gt_wid_across_m"])), bool(use)
+
+
+def cross_fit_nomap(df: pd.DataFrame, keys: list[str], k: int = 5, min_n: int = 5,
+                    prefix: str = "nomap", fold_by: str = "day") -> pd.DataFrame:
+    """No-map baseline scored like `cross_fit`. `keys` should include the
+    driving direction (front vs rear target) since no map gives the side."""
+    if "ego_off_along_m" not in df:
+        df = add_ego_offsets(df)
+    unit = (df["sequence_id"].map(recording_day) if fold_by == "day"
+            else df["sequence_id"])
+    folds = unit.map(lambda s: fold_of(s, k))
+    out = []
+    for f in range(k):
+        tr = df[folds != f]
+        priors = {"keys": keys, "min_n": min_n, "group": tr.groupby(keys)[NOMAP_COLS].median(),
+                  "n": tr.groupby(keys).size(), "global": tr[NOMAP_COLS].median()}
+        for i, row in df[folds == f].iterrows():
+            corners, used = nomap_box(row, priors)
             m = box_metrics(corners, polygon_from_str(row["gt_polygon"]))
             out.append({"_i": i, f"{prefix}_group_prior": int(used),
                         **{f"{prefix}_{name}": v for name, v in m.items()}})

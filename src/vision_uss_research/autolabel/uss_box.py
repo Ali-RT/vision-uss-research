@@ -349,6 +349,11 @@ def evaluate_sequence(mf4_path: Path, label_csv: Path) -> dict:
                 row.update(face_cx=round(f["centre"][0], 4), face_cy=round(f["centre"][1], 4),
                            ego_yaw_rad=round(f["yaw"], 6), obj_side=f["side"],
                            gt_len_along_m=round(length, 4), gt_wid_across_m=round(width, 4))
+        # final ego pose (the "final"-timing reference of the face geometry):
+        # enables the no-map baseline, which places the box from the ego pose
+        # and labeling-time metadata alone
+        row.update(ego_x_m=round(float(sig["pose"]["x"][1][-1]), 4),
+                   ego_y_m=round(float(sig["pose"]["y"][1][-1]), 4))
         row["gt_polygon"] = polygon_to_str(gt["polygon"])
         if chosen["v1"] is None and chosen["v2"] is None:
             row["error"] = "no_object_selected"
