@@ -9,7 +9,6 @@ paper figures to <run_dir>/analysis/.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
@@ -20,7 +19,7 @@ import pandas as pd
 import yaml
 
 from vision_uss_research.autolabel.geometry import box_metrics, centroid, oriented_box
-from vision_uss_research.autolabel.priors import add_offsets, cross_fit
+from vision_uss_research.autolabel.priors import add_offsets, cross_fit, fold_of, recording_day
 from vision_uss_research.autolabel.uss_box import convex_hull, polygon_from_str
 
 REPO = Path(__file__).resolve().parents[1]
@@ -38,11 +37,23 @@ def canonical_map() -> dict:
 
 
 def boot_ci(x, fn=np.median, n=N_BOOT):
-    x = pd.to_numeric(pd.Series(np.asarray(x).ravel()), errors="coerce").dropna().to_numpy(float)
-    if len(x) < 5:
+    """Percentile CI under a DAY-CLUSTER bootstrap when `x` is a Series indexed
+    like `ev` (days resampled whole; sequences of one session are
+    near-duplicates), else a plain bootstrap."""
+    s = pd.to_numeric(pd.Series(x), errors="coerce").dropna()
+    if len(s) < 5:
         return (np.nan, np.nan)
-    b = [fn(x[rng.integers(0, len(x), len(x))]) for _ in range(n)]
+    if DAYS is not None and s.index.isin(DAYS.index).all():
+        groups = [g.to_numpy(float) for _, g in s.groupby(DAYS.loc[s.index])]
+        b = [fn(np.concatenate([groups[i] for i in rng.integers(0, len(groups), len(groups))]))
+             for _ in range(n)]
+    else:
+        v = s.to_numpy(float)
+        b = [fn(v[rng.integers(0, len(v), len(v))]) for _ in range(n)]
     return tuple(float(v) for v in np.round(np.percentile(b, [2.5, 97.5]), 3))
+
+
+DAYS: pd.Series | None = None   # set in main(): recording day per ev row
 
 
 def min_area_rect(poly):
@@ -88,16 +99,18 @@ def main(run_dir: Path):
     ev = d[(d["error"] == "") & d["v1_iou"].notna() & (d["n_targets"] == 1)
            & d["face_cx"].notna()].copy().reset_index(drop=True)
 
-    # ---- v2 priors (library code, 5-fold cross-fitted) - the variants in the paper
+    # ---- v2 priors (library code, 5-fold cross-fitted BY RECORDING DAY) - paper variants
+    global DAYS
     ev = add_offsets(ev)
-    ev["fold"] = ev["sequence_id"].map(
-        lambda s: int(hashlib.md5(s.encode()).hexdigest(), 16) % K_FOLDS)
+    ev["day"] = ev["sequence_id"].map(recording_day)
+    DAYS = ev["day"]
+    ev["fold"] = ev["day"].map(lambda d: fold_of(d, K_FOLDS))
     ev["_all"] = "all"
     for prefix, keys, off in (("glob", ["_all"], False), ("cls", ["obj"], False),
                               ("cls_off", ["obj"], True),
                               ("cls_appr", ["obj", "approach"], True)):
         ev = ev.join(cross_fit(ev, keys, use_offset=off, k=K_FOLDS,
-                               min_n=MIN_CLASS_TRAIN, prefix=prefix))
+                               min_n=MIN_CLASS_TRAIN, prefix=prefix, fold_by="day"))
     ev["cls_prior_used"] = ev["cls_group_prior"]
 
     # ---- diagnostics: human box orientation, oracle orientation / centre

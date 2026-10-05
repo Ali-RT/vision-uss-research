@@ -182,3 +182,12 @@ def test_cross_fit_never_uses_own_fold_and_falls_back():
     out = cross_fit(df, ["obj"], k=3, min_n=100, prefix="p")   # min_n too high -> global
     assert out["p_group_prior"].eq(0).all()
     assert out["p_iou"].dropna().eq(1.0).all()
+
+
+def test_recording_day_and_day_folds_keep_days_together():
+    from vision_uss_research.autolabel.priors import cross_fit, recording_day
+    assert recording_day("110613_20190308_LB_XO2617_039_151540") == "20190308"
+    df = _prior_rows()
+    df["sequence_id"] = [f"{i}_2019030{i % 3}_x" for i in range(len(df))]
+    out = cross_fit(df, ["obj"], k=3, min_n=1, prefix="d", fold_by="day")
+    assert out["d_iou"].notna().all()

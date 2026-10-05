@@ -67,13 +67,26 @@ def fold_of(sequence_id: str, k: int) -> int:
     return int(hashlib.md5(str(sequence_id).encode()).hexdigest(), 16) % k
 
 
+def recording_day(sequence_id: str) -> str:
+    """Recording day = second token of the sequence id (same convention as
+    datasets.yolo_export.split_by_day). Repeated approaches to one staged
+    object happen within a session, so the day is the leakage-safe unit."""
+    parts = str(sequence_id).split("_")
+    return parts[1] if len(parts) > 1 else str(sequence_id)
+
+
 def cross_fit(df: pd.DataFrame, keys: list[str], use_offset: bool = True,
-              k: int = 5, min_n: int = 5, prefix: str = "prior") -> pd.DataFrame:
+              k: int = 5, min_n: int = 5, prefix: str = "prior",
+              fold_by: str = "sequence") -> pd.DataFrame:
     """Score every row with priors fit on the OTHER folds. Returns a frame
-    indexed like `df` with `{prefix}_<box metrics>` and `{prefix}_group_prior`."""
+    indexed like `df` with `{prefix}_<box metrics>` and `{prefix}_group_prior`.
+    `fold_by="day"` keeps every recording day inside one fold, so no prior is
+    learned from near-duplicate approaches of the same session."""
     if "off_along_m" not in df:
         df = add_offsets(df)
-    folds = df["sequence_id"].map(lambda s: fold_of(s, k))
+    unit = (df["sequence_id"].map(recording_day) if fold_by == "day"
+            else df["sequence_id"])
+    folds = unit.map(lambda s: fold_of(s, k))
     out = []
     for f in range(k):
         priors = fit_priors(df[folds != f], keys, use_offset, min_n)

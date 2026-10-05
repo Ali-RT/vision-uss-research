@@ -25,7 +25,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from vision_uss_research.autolabel.geometry import oriented_box  # noqa: E402
-from vision_uss_research.autolabel.priors import fit_priors, fold_of, prior_box  # noqa: E402
+from vision_uss_research.autolabel.priors import (fit_priors, fold_of, prior_box,  # noqa: E402
+                                                  recording_day)
 from vision_uss_research.autolabel.uss_box import (V1_BOX_LENGTH_M,  # noqa: E402
                                                    V1_BOX_WIDTH_M, polygon_from_str)
 
@@ -178,8 +179,8 @@ def fig_examples(ev: pd.DataFrame, path: Path):
     fig, axes = plt.subplots(1, 4, figsize=(FULL_W, 2.15))
     for ax, (title, mask) in zip(axes, cases):
         r = _pick(ev, mask)
-        train = ev[ev["sequence_id"].map(lambda s: fold_of(s, K_FOLDS))
-                   != fold_of(r["sequence_id"], K_FOLDS)]
+        own = fold_of(recording_day(r["sequence_id"]), K_FOLDS)
+        train = ev[ev["sequence_id"].map(lambda s: fold_of(recording_day(s), K_FOLDS)) != own]
         v2, _ = prior_box(r, fit_priors(train, ["obj", "approach"], use_offset=True))
         face = np.array([r["face_cx"], r["face_cy"]])
         tmpl = oriented_box(face[0], face[1], r["ego_yaw_rad"], V1_BOX_LENGTH_M, V1_BOX_WIDTH_M)
@@ -289,6 +290,35 @@ def table_classes(ev: pd.DataFrame, path: Path, min_n: int = 30):
     path.write_text("\n".join(lines) + "\n")
 
 
+def table_policy(pol: pd.DataFrame, path: Path):
+    lines = [r"\begin{tabular}{@{}cccc@{}}", r"\toprule",
+             r"$t$ & accepted & accepted IoU$\geq$0.5 & rest IoU$\geq$0.5 \\", r"\midrule"]
+    for _, r in pol.iterrows():
+        lines.append(f"{r['threshold']:.1f} & {100 * r['accepted_share']:.1f}\\% & "
+                     f"{100 * r['accepted_iou>=0.5']:.1f}\\% & {100 * r['rest_iou>=0.5']:.1f}\\% \\\\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
+CTRL_LABEL = {"none": "none", "size": "+ box size", "size+approach": "+ approach",
+              "size+approach+shape": "+ shape"}
+
+
+def table_height(reg: pd.DataFrame, path: Path):
+    """Low-minus-high IoU coefficient, prototype vs v2, as controls are added."""
+    lines = [r"\begin{tabular}{@{}lcc@{}}", r"\toprule",
+             r"Controls (cumulative) & v1 & v2 \\", r"\midrule"]
+    for ctrl, lbl in CTRL_LABEL.items():
+        cells = []
+        for y in ("v1", "cls_appr_day"):
+            r = reg[(reg["iou"] == y) & (reg["controls"] == ctrl)].iloc[0]
+            lo, hi = _ci(r["day_ci"])
+            cells.append(f"${r['low_minus_high']:+.3f}$ \\scriptsize[{lo:+.2f}, {hi:+.2f}]")
+        lines.append(f"{lbl} & {cells[0]} & {cells[1]} \\\\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
 def main(run_dir: Path, out_dir: Path):
     a = run_dir / "analysis"
     figs, tabs = out_dir / "figures", out_dir / "tables"
@@ -305,6 +335,9 @@ def main(run_dir: Path, out_dir: Path):
     table_ladder(lad, tabs / "tab_ladder.tex")
     table_approach(appr, tabs / "tab_approach.tex")
     table_classes(ev, tabs / "tab_classes.tex")
+    table_policy(pd.read_csv(a / "review_policy.csv"), tabs / "tab_policy.tex")
+    if (a / "robustness_height_regression.csv").exists():
+        table_height(pd.read_csv(a / "robustness_height_regression.csv"), tabs / "tab_height.tex")
     print("wrote", sorted(p.name for p in figs.iterdir()), sorted(p.name for p in tabs.iterdir()))
 
 

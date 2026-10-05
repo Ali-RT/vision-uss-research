@@ -118,3 +118,14 @@ Findings:
   object depth for cars (GT centre 1.54 m beyond the map object; car IoU
   0.14 -> 0.43 with the class offset). Depth shift for ALL classes hurts.
 - Remaining-gap oracles (cls size): true orientation 0.477, true centre 0.562.
+
+**Robustness (2026-10-05, `scripts/autolabel_robustness.py`) - headline numbers
+now DAY-GROUPED.** Priors cross-fitted with every recording day (58) inside one
+fold; CIs from a day-cluster bootstrap. Sequence-level folds leaked
+near-duplicate approaches: final median 0.468 -> **0.439 (CI 0.395-0.481)**,
+IoU>=0.5 45.5% -> **41.8%**; review policy t=0.6: 29.5% accepted at 64.9%,
+t=0.7: 12.7% at 73.3%. Height test (OLS, low-minus-high IoU): prototype
++0.083 -> -0.010 [-0.07, +0.05] once box size is controlled; v2 -0.083 with
+size+approach -> -0.036 [-0.08, +0.01] once shape (elongation, obliqueness)
+is added. Threshold curve: v2 beats v1 at every t (0.3: 67% vs 35%; 0.7:
+13% vs 5%). All 5,595 scored sequences (multi-target incl.): 0.429.
