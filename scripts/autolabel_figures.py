@@ -220,7 +220,7 @@ def fig_examples(ev: pd.DataFrame, path: Path):
 
 # ------------------------------------------------------------------ tables
 
-def table_ladder(lad: pd.DataFrame, path: Path):
+def table_ladder(lad: pd.DataFrame, path: Path, nomap: pd.DataFrame | None = None):
     lines = [r"\begin{tabular}{@{}lccccc@{}}", r"\toprule",
              r" & \multicolumn{3}{c}{median IoU} & IoU$\geq$0.5 & centroid \\",
              r"\cmidrule(lr){2-4}",
@@ -242,6 +242,14 @@ def table_ladder(lad: pd.DataFrame, path: Path):
         lo = lad[(lad["variant"] == v) & (lad["subset"] == "low")].iloc[0]
         lines.append(f"\\textit{{{lbl}}} & {a['iou_med']:.3f} & {h['iou_med']:.3f} & "
                      f"{lo['iou_med']:.3f} & {100 * a['iou>=0.5']:.1f}\\% & -- \\\\")
+    if nomap is not None:   # same day-grouped folds as the v2 rows above
+        a, h, lo = (nomap[(nomap["variant"] == "nomap_appr") & (nomap["subset"] == s_)].iloc[0]
+                    for s_ in ("all", "high", "low"))
+        ci = _ci(a["iou_med_day_ci"])
+        lines.append(f"\\textit{{No map (ego pose + class $\\times$ approach)}} & "
+                     f"{a['iou_med']:.3f} ({ci[0]:.3f}--{ci[1]:.3f}) & {h['iou_med']:.3f} & "
+                     f"{lo['iou_med']:.3f} & {100 * a['iou>=0.5']:.1f}\\% & "
+                     f"{a['centroid_med_m']:.2f} \\\\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     path.write_text("\n".join(lines) + "\n")
 
@@ -332,7 +340,9 @@ def main(run_dir: Path, out_dir: Path):
     fig_template_fit(ev, figs / "fig_template_fit.pdf")
     fig_objects(objs, figs / "fig_objects.pdf")
     fig_examples(ev, figs / "fig_examples.pdf")
-    table_ladder(lad, tabs / "tab_ladder.tex")
+    nomap_csv = a / "robustness_nomap.csv"
+    table_ladder(lad, tabs / "tab_ladder.tex",
+                 pd.read_csv(nomap_csv) if nomap_csv.exists() else None)
     table_approach(appr, tabs / "tab_approach.tex")
     table_classes(ev, tabs / "tab_classes.tex")
     table_policy(pd.read_csv(a / "review_policy.csv"), tabs / "tab_policy.tex")

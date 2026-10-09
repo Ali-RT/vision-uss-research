@@ -129,3 +129,15 @@ t=0.7: 12.7% at 73.3%. Height test (OLS, low-minus-high IoU): prototype
 size+approach -> -0.036 [-0.08, +0.01] once shape (elongation, obliqueness)
 is added. Threshold curve: v2 beats v1 at every t (0.3: 67% vs 35%; 0.7:
 13% vs 5%). All 5,595 scored sequences (multi-target incl.): 0.429.
+
+**No-map baseline (`al_eval_v3`, 2026-10-08, git 14c6730; identical v1..v2
+numbers to v2 plus the final ego pose).** Class x approach box placed at the
+median offset from the final ego pose (grouped also by driving direction),
+same day-grouped folds: **0.296 (CI 0.270-0.327)** vs **0.439** with the map;
+centroid 0.46 m vs 0.28 m. Map value by class (paired mean IoU diff, day CIs):
+pole +0.24, wooden board +0.23, bollard +0.21, tree +0.18, cone +0.18, cube
++0.16, car +0.13, child dummy +0.10, speed bump +0.06; bicycle stand +0.03,
+bush +0.01, curbstone -0.03 [-0.05, +0.01]. By approach: displaced high +0.22,
+central high +0.06 (no-map already 0.49 at central - staged stops are
+repeatable), 45deg low -0.03. The map localises compact objects; for long
+objects it is no better than the stop position.
