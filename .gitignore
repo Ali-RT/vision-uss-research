@@ -13,6 +13,10 @@ __pycache__/
 .vscode/
 .idea/
 
+# Model weights Ultralytics downloads into the working directory
+*.pt
+mobileclip*.ts
+
 # Project artifacts
 outputs/
 data/processed/

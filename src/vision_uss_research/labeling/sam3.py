@@ -107,6 +107,14 @@ class Sam3Engine:
                 masks[output.frame_idx] = video_masks[0, 0].cpu().numpy().astype(bool)
         return masks
 
+    def track(self, frames: list, seed_idx: int,
+              prompt: dict) -> dict[int, np.ndarray]:
+        """Forward propagation over an in-memory list of PIL frames
+        (list position -> mask); reverse the list to track backward."""
+        masks = self._track_forward(frames, seed_idx, prompt)
+        self.free()
+        return masks
+
     def propagate(self, frames_dir: Path, seed_idx: int,
                   prompt: dict) -> dict[int, np.ndarray]:
         """Propagate a seed prompt across all JPEGs in frames_dir. Frames before

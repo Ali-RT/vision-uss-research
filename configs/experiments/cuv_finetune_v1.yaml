@@ -1,0 +1,84 @@
+# CUV_ObjectCheck fine-tune (notebooks/17_cuv_wall_sam3_finetune.ipynb).
+# Adds the 2026-09-22 collection to the dataset_v2 model: walls labeled by
+# YOLOE text prompt, near-range gaps by SAM3, new objects mapped into the
+# existing 8 classes, old data replayed so the old camera is not forgotten.
+stage: train
+tag: cuv_v1
+
+# relative to the artifacts dir (Drive on Colab); built locally by
+# scripts/export_cuv_bundle.py and uploaded by hand
+bundle: cuv_objectcheck/cuv_bundle_v1.zip
+base_dataset: datasets/20260718_dataset_v2
+base_model: models/20260719_train_yolo_v1/train/weights/best.pt
+
+# tracelist object -> dataset_v2 training class (null = left out of training)
+class_map:
+  isopole: pole
+  dummychild: dummychild
+  dummyadult: dummychild
+  car: high_other
+  wall: high_other
+  box30: high_other
+  box40: high_other
+  curbhigh: curbstone
+  woodencurb10: curbstone
+  metalbar: null          # invisible below ~5 m; far labels unverified
+
+class_ids:                # dataset_v2, unchanged
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+  low_other: 6
+  high_other: 7
+
+split:                    # per (object, side): test = one trace per speed
+  n_test_per_group: 2
+  n_val_per_group: 1
+  seed: 0
+frame_stride: 3           # consecutive frames are near-duplicates at 30 fps
+
+yoloe:
+  weights: yoloe-26s-seg.pt
+  prompt: wall
+  conf: 0.15
+  imgsz: 640
+  max_gap: 20
+
+sam3:
+  min_gap: 5              # shorter gaps are left to interpolation
+  max_tail: 90            # frames past the last label (3 s, the near range)
+  backfill_classes: [wall]
+  max_lead: 60
+  min_area_px: 150
+  end_iou: 0.3            # interior gap: propagated mask must still match
+  max_segment: 300        # longer gaps are skipped (tracker memory, drift)
+  score_threshold: 0.3
+
+models:                   # MODEL_CHOICE in the notebook
+  yolo11s_ft:             # continue from the paper model
+    init: base_model
+    epochs: 30
+    replay_frac: 0.35
+  yolo26s:                # newer architecture, trained from COCO weights
+    init: yolo26s.pt
+    epochs: 60
+    replay_frac: 1.0
+
+train:
+  imgsz: 640              # new camera's native width; old 960-wide frames
+  batch: 16               #   are downscaled, matching the scale finding
+  seed: 0
+  augment:
+    mosaic: 1.0
+    copy_paste: 0.3
+    fliplr: 0.5
+    scale: 0.5
+
+eval:
+  imgsz: [480, 640]
+  conf: 0.15
+  min_score: 0.05
+  spec_window_m: 0.25
