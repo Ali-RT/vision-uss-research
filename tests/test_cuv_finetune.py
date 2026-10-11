@@ -147,3 +147,91 @@ def test_spec_eval_window_and_final_approach():
     pt, summary = spec_eval(df)
     assert bool(pt["passes"].iloc[0])                # window 0.95-1.2 m mostly hit
     assert summary["passing"].iloc[0] == 1
+
+
+def _cfg():
+    return {"tag": "cuv_v1", "base_dataset": "datasets/x", "bundle": "b.zip",
+            "class_map": {"wall": "high_other"}, "class_ids": {"high_other": 7},
+            "split": {"seed": 0}, "frame_stride": 3,
+            "train_defaults": {"imgsz": 640, "optimizer": "auto", "lr0": 0.01,
+                               "augment": {"mosaic": 1.0, "scale": 0.5}},
+            "experiments": {"ft": {"init": "base_model", "epochs": 10,
+                                   "replay_frac": 0.35, "optimizer": "SGD",
+                                   "lr0": 0.001, "augment": {"scale": 0.3}}}}
+
+
+def test_experiment_config_overlays_defaults():
+    from vision_uss_research.cuv_finetune import experiment_config
+    ec = experiment_config(_cfg(), "ft")
+    assert ec["optimizer"] == "SGD" and ec["lr0"] == 0.001 and ec["imgsz"] == 640
+    assert ec["augment"] == {"mosaic": 1.0, "scale": 0.3}
+    assert ec["name"] == "ft"
+
+
+def test_dataset_id_separates_replay_and_data_keys():
+    from vision_uss_research.cuv_finetune import dataset_id
+    cfg = _cfg()
+    a, b = dataset_id(cfg, 0.35), dataset_id(cfg, 1.0)
+    assert a.startswith("dataset_cuv_v1_r035_") and b.startswith("dataset_cuv_v1_r100_")
+    assert a == dataset_id(_cfg(), 0.35)                  # stable
+    cfg["frame_stride"] = 5
+    assert dataset_id(cfg, 0.35) != a                     # any data key changes it
+
+
+def test_claim_run_dir_new_same_conflict(tmp_path):
+    import json
+    import pytest
+    from vision_uss_research.cuv_finetune import claim_run_dir
+    d = tmp_path / "run"
+    assert claim_run_dir(d, {"a": 1}) == "new"
+    d.mkdir()
+    (d / "run.json").write_text(json.dumps({"config": {"a": 1}}))
+    assert claim_run_dir(d, {"a": 1}) == "same"
+    with pytest.raises(ValueError):
+        claim_run_dir(d, {"a": 2})
+
+
+def test_training_state(tmp_path):
+    from vision_uss_research.cuv_finetune import training_state
+    w = tmp_path / "weights"
+    assert training_state(tmp_path) == "fresh"
+    w.mkdir()
+    (w / "last.pt").write_text("x")
+    assert training_state(tmp_path) == "resume"
+    (w / "best.pt").write_text("x")
+    (tmp_path / "train_done.json").write_text("{}")
+    assert training_state(tmp_path) == "done"
+
+
+def test_best_epoch_uses_fitness(tmp_path):
+    from vision_uss_research.cuv_finetune import best_epoch
+    p = tmp_path / "results.csv"
+    pd.DataFrame({"epoch": [1, 2, 3], "metrics/mAP50(B)": [0.9, 0.95, 0.8],
+                  "metrics/mAP50-95(B)": [0.7, 0.6, 0.72]}).to_csv(p, index=False)
+    assert best_epoch(p) == 3
+    assert best_epoch(tmp_path / "missing.csv") is None
+
+
+def test_spec_eval_localized_rejects_boxes_off_the_object():
+    dist = np.linspace(2.0, 1.0, 11)
+    base = {"side": "rear", "trace": 1, "frame_idx": range(11),
+            "label_class": "box30", "height_bin": "high", "dist_m": dist,
+            "det_bin": "high", "lx0": 100.0, "ly0": 100.0, "lx1": 200.0, "ly1": 200.0}
+    on = pd.DataFrame({**base, "px0": 105.0, "py0": 100.0, "px1": 205.0, "py1": 200.0})
+    off = pd.DataFrame({**base, "px0": 400.0, "py0": 10.0, "px1": 500.0, "py1": 60.0})
+    pt_on, _ = spec_eval(on)
+    pt_off, _ = spec_eval(off)
+    assert bool(pt_on["passes_loc"].iloc[0]) and bool(pt_off["passes"].iloc[0])
+    assert not bool(pt_off["passes_loc"].iloc[0])     # right bin, wrong place
+    assert pt_off["window_loc_rate"].iloc[0] == 0.0
+
+
+def test_spec_eval_localized_is_unknown_without_labels():
+    dist = np.linspace(2.0, 1.0, 11)
+    df = pd.DataFrame({"side": "rear", "trace": 1, "frame_idx": range(11),
+                       "label_class": "box30", "height_bin": "high", "dist_m": dist,
+                       "det_bin": "high", "lx0": np.nan, "ly0": np.nan,
+                       "lx1": np.nan, "ly1": np.nan,
+                       "px0": 1.0, "py0": 1.0, "px1": 9.0, "py1": 9.0})
+    pt, _ = spec_eval(df)
+    assert pt["passes_loc"].iloc[0] is None and bool(pt["passes"].iloc[0])

@@ -57,28 +57,44 @@ sam3:
   max_segment: 300        # longer gaps are skipped (tracker memory, drift)
   score_threshold: 0.3
 
-models:                   # MODEL_CHOICE in the notebook
-  yolo11s_ft:             # continue from the paper model
-    init: base_model
-    epochs: 30
-    replay_frac: 0.35
-  yolo26s:                # newer architecture, trained from COCO weights
-    init: yolo26s.pt
-    epochs: 60
-    replay_frac: 1.0
-
-train:
+train_defaults:           # every experiment starts from these
   imgsz: 640              # new camera's native width; old 960-wide frames
   batch: 16               #   are downscaled, matching the scale finding
   seed: 0
+  optimizer: auto         # NOTE: with auto, Ultralytics ignores lr0 and
+  lr0: 0.01               #   picks its own; set an optimizer to control lr0
+  warmup_epochs: 3
+  freeze: null
   augment:
     mosaic: 1.0
     copy_paste: 0.3
     fliplr: 0.5
     scale: 0.5
 
+# RUNS in notebook 17 picks from these; each gets models/train_cuv_v1_<name>
+# and a dataset named by its replay share. Never edit an experiment that has
+# already run - add a new name instead (the notebook refuses a changed config).
+experiments:
+  yolo11s_ft_v2:          # gentle fine-tune of the paper model: the first
+    init: base_model      #   run (auto optimizer) ramped lr to 0.028 and its
+    epochs: 10            #   best.pt was epoch 1
+    replay_frac: 0.35
+    optimizer: SGD
+    lr0: 0.001
+    warmup_epochs: 0
+  yolo26s_full:           # fair YOLO26s test: COCO start, all of dataset_v2
+    init: yolo26s.pt
+    epochs: 60
+    replay_frac: 1.0
+
+# First runs (2026-10-09), kept for comparison only - not re-runnable:
+# models/train_cuv_v1_yolo11s_ft (auto optimizer, 30 epochs, replay 0.35,
+# best.pt = epoch 1) and models/train_cuv_v1_yolo26s (60 epochs; trained on
+# the replay-0.35 dataset although its config says 1.0).
+legacy_runs: [train_cuv_v1_yolo11s_ft, train_cuv_v1_yolo26s]
+
 eval:
-  imgsz: [480, 640]
+  imgsz: [480, 640]       # spec eval sizes; mAP is measured at train_defaults.imgsz
   conf: 0.15
   min_score: 0.05
   spec_window_m: 0.25

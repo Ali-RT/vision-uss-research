@@ -112,14 +112,43 @@ a model of the in-car camera.
 2. Upload the zip to `<artifacts>/cuv_objectcheck/` on Drive.
 3. Colab, GPU runtime: `notebooks/17_cuv_wall_sam3_finetune.ipynb`
    (config `configs/experiments/cuv_finetune_v1.yaml`). Stages: YOLOE wall
-   labels -> SAM3 gap fill -> dataset (trace-level split, dataset_v2 replay)
-   -> fine-tune (`MODEL_CHOICE` `yolo11s_ft` or `yolo26s`) -> spec eval on
-   held-out traces vs the paper model, plus mAP on old and new val data.
-   Every stage saves to Drive and resumes.
+   labels -> SAM3 gap fill -> shared prep (labels, trace-level split, fixed
+   evaluation sets) -> run queue (`RUNS`, recipes in `experiments`) ->
+   comparison. Dataset folders are named by replay share plus a hash of the
+   data settings, model folders by experiment name, and a folder holding a
+   different recipe is refused, so runs can go back to back. Every stage
+   resumes after a disconnect.
 
-Smoke-tested end to end locally (two objects, 1 epoch, SAM3 off): every
-stage runs; the YOLOE wall labels were checked visually at 0.2-3.7 m. The
-SAM3 stage needs a GPU and access to `facebook/sam3`, so it has not run yet.
+### First runs (2026-10-09, A100)
+
+Labels after stages 1-2 (frames within 8 m): wall coverage 0 -> 0.78
+(1,322 YOLOE + 1,023 SAM3 frames); SAM3 added 76-565 frames per other object.
+
+| | baseline | yolo11s_ft | yolo26s |
+|---|---|---|---|
+| val_old mAP50 (35% sample of dataset_v2 val) | 0.933 | 0.930 | 0.860 |
+| val_cuv mAP50 | 0.570 | 0.984 | 0.992 |
+| held-out traces passing @480 (excl. metal bar) | 15/22 | 20/22 | 20/22 |
+| worst High called Low @480 | 1.00 (wall) | 0 | 0.051 (front car) |
+
+Both new models pass every trained object on the held-out traces; the
+wooden curb (1.0 m spec, at the bottom edge of the image) and the excluded
+metal bar still fail. 480 beats 640 for the fine-tune: at 640 it calls the
+wooden curb and metal bar High in up to 27% and 41% of boxed frames.
+
+Two flaws make these runs provisional:
+
+- `yolo11s_ft`'s best.pt is **epoch 1**. With `optimizer: auto`, Ultralytics
+  ignored `lr0` and warmed up to lr 0.028, which knocked the converged weights
+  off (mAP50-95 0.722 -> 0.660 by epoch 5, 0.713 at epoch 30).
+- `yolo26s` almost certainly trained on the **35% replay dataset**, not 100%:
+  both runs share one dataset folder name, the baseline's val numbers are
+  identical across the runs, and its epochs were shorter than the fine-tune's.
+
+Fixes, now in the notebook and config: explicit optimizer per experiment;
+new experiments `yolo11s_ft_v2` (SGD, lr0 0.001, no warmup, 10 epochs) and
+`yolo26s_full` (100% replay); per-recipe folder names with a conflict guard;
+mAP on all of dataset_v2 val for every run.
 
 ## Caveats
 

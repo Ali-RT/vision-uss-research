@@ -16,6 +16,8 @@ __pycache__/
 # Model weights Ultralytics downloads into the working directory
 *.pt
 mobileclip*.ts
+# Ultralytics' default predict/val output folder
+runs/
 
 # Project artifacts
 outputs/

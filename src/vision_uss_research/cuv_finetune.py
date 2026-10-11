@@ -9,12 +9,20 @@ SAM3, YOLO) are passed in; nothing here imports torch or ultralytics.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from vision_uss_research.labeling.corridor import corridor_weight
 
 BOX = ["x0", "y0", "x1", "y1"]
+
+# Config keys that shape the training data (besides each run's replay share).
+DATA_KEYS = ("base_dataset", "bundle", "class_map", "class_ids", "split",
+             "frame_stride")
 
 # Detector class -> height bin (dataset_v2 binning).
 DET_BIN = {"curbstone": "low", "speedbump": "low", "woodenboard": "low",
@@ -281,13 +289,28 @@ def final_approach(g: pd.DataFrame) -> pd.DataFrame:
     return g.iloc[int(g["dist_m"].to_numpy().argmax()):]
 
 
-def spec_eval(frames: pd.DataFrame, window: float = 0.25,
-              spec: dict = SPEC) -> tuple[pd.DataFrame, pd.DataFrame]:
+def spec_eval(frames: pd.DataFrame, window: float = 0.25, spec: dict = SPEC,
+              loc_iou: float = 0.3) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per-trace and per-class spec results. `frames` needs side, trace,
     frame_idx, label_class, height_bin, dist_m and det_bin (None = no box).
     A frame is a HIT when det_bin == height_bin; a trace passes when >= 50% of
-    its frames in [spec - window, spec] are HITs."""
+    its frames in [spec - window, spec] are HITs.
+
+    HIT alone never checks WHERE the box is: a model boxing everything as
+    high_other passes every high object. With picked boxes (px0..py1) and
+    label boxes (lx0..ly1, NaN = no label) the localized variant also needs
+    IoU >= loc_iou on labeled window frames (window_loc_rate, passes_loc;
+    None when the window has no labeled frame to check against)."""
     df = frames.assign(hit=frames["det_bin"] == frames["height_bin"])
+    has_loc = all(c in df.columns for c in ("px0", "py0", "px1", "py1",
+                                            "lx0", "ly0", "lx1", "ly1"))
+    if has_loc:
+        labeled = df["lx0"].notna()
+        overlap = [iou(p, q) >= loc_iou if lab and not np.isnan(p[0]) else False
+                   for p, q, lab in zip(df[["px0", "py0", "px1", "py1"]].to_numpy(float),
+                                        df[["lx0", "ly0", "lx1", "ly1"]].to_numpy(float),
+                                        labeled)]
+        df = df.assign(labeled=labeled, loc_hit=df["hit"] & np.array(overlap, bool))
     per_trace = []
     for (side, trace), g in df.groupby(["side", "trace"]):
         label = g["label_class"].iloc[0]
@@ -295,13 +318,22 @@ def spec_eval(frames: pd.DataFrame, window: float = 0.25,
         g = final_approach(g)
         win = g[(g["dist_m"] <= spec_d) & (g["dist_m"] >= spec_d - window)]
         boxed = g[g["det_bin"].notna()]
-        per_trace.append({
+        row = {
             "side": side, "trace": int(trace), "label_class": label,
             "spec_m": spec_d, "window_frames": len(win),
             "window_hit_rate": round(float(win["hit"].mean()), 2) if len(win) else None,
             "passes": bool(len(win) and win["hit"].mean() >= 0.5),
             "wrong_bin_rate": round(float((boxed["det_bin"] != boxed["height_bin"]).mean()), 3) if len(boxed) else None,
-        })
+        }
+        if has_loc:
+            wl = win[win["labeled"]]
+            rate = float(wl["loc_hit"].mean()) if len(wl) else None
+            # no labeled window frames: position cannot be checked (None),
+            # which is not the same as a failed check
+            row.update(window_labeled=len(wl),
+                       window_loc_rate=None if rate is None else round(rate, 2),
+                       passes_loc=None if rate is None else bool(rate >= 0.5))
+        per_trace.append(row)
     pt = pd.DataFrame(per_trace)
     summary = (pt.groupby("label_class")
                .agg(traces=("trace", "size"), passing=("passes", "sum"),
@@ -311,3 +343,70 @@ def spec_eval(frames: pd.DataFrame, window: float = 0.25,
         lambda c: f"{spec[c][0]:.1f} m / {spec[c][1]:.0%}")
     summary["passing"] = summary["passing"].astype(int)
     return pt, summary
+
+
+# ------------------------------------------------------------ run queue
+
+def experiment_config(cfg: dict, name: str) -> dict:
+    """Effective recipe of one queued run: `train_defaults` overlaid with the
+    experiment's own keys (augment dicts merged key by key)."""
+    exp = cfg["experiments"][name]
+    defaults = cfg["train_defaults"]
+    out = {**defaults, **{k: v for k, v in exp.items() if k != "augment"}}
+    out["augment"] = {**defaults.get("augment", {}), **exp.get("augment", {})}
+    out["name"] = name
+    return out
+
+
+def data_config(cfg: dict, replay_frac: float) -> dict:
+    return {**{k: cfg[k] for k in DATA_KEYS}, "replay_frac": replay_frac}
+
+
+def dataset_id(cfg: dict, replay_frac: float) -> str:
+    """Dataset folder name: the replay share in clear plus a hash of every
+    other data-shaping key, so two runs share a dataset only when their
+    training data would be identical."""
+    digest = hashlib.sha1(json.dumps(data_config(cfg, replay_frac), sort_keys=True,
+                                     default=str).encode()).hexdigest()[:6]
+    return f"dataset_{cfg['tag']}_r{round(replay_frac * 100):03d}_{digest}"
+
+
+def _canonical(obj) -> str:
+    return json.dumps(obj, sort_keys=True, default=str)
+
+
+def claim_run_dir(run_dir: Path, config: dict) -> str:
+    """'new' if run_dir has no run yet, 'same' if it holds a run with this exact
+    config; raises if it holds a different config (a reused name would
+    silently mix two recipes - the first CUV yolo26s run trained on the
+    yolo11s dataset that way)."""
+    record = Path(run_dir) / "run.json"
+    if not record.exists():
+        return "new"
+    stored = json.loads(record.read_text()).get("config")
+    if _canonical(stored) != _canonical(config):
+        raise ValueError(f"{run_dir} holds a run with a different config - "
+                         "use a new experiment name or delete that folder")
+    return "same"
+
+
+def training_state(train_dir: Path) -> str:
+    """'done' (marker written after train() returned), 'resume' (interrupted:
+    last.pt but no marker) or 'fresh'."""
+    train_dir = Path(train_dir)
+    if (train_dir / "train_done.json").exists() and \
+            (train_dir / "weights" / "best.pt").exists():
+        return "done"
+    if (train_dir / "weights" / "last.pt").exists():
+        return "resume"
+    return "fresh"
+
+
+def best_epoch(results_csv: Path) -> int | None:
+    """Epoch Ultralytics keeps as best.pt (fitness 0.1 mAP50 + 0.9 mAP50-95)."""
+    if not Path(results_csv).exists():
+        return None
+    r = pd.read_csv(results_csv)
+    r.columns = [c.strip() for c in r.columns]
+    fit = 0.1 * r["metrics/mAP50(B)"] + 0.9 * r["metrics/mAP50-95(B)"]
+    return int(r.loc[fit.idxmax(), "epoch"])
