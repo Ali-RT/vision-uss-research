@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold Label Review</title>
+<style>
+:root{--bg:#f4f4f1;--card:#fff;--ink:#1c1c1a;--mut:#6a6a64;--line:#deded8;
+--box:#e0a000;--ok:#2e9d4a;--warn:#c97a00;--bad:#c93a3a;--acc:#2d5bd7}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141413;--card:#1e1e1c;
+--ink:#ececE8;--mut:#9a9a93;--line:#34342f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+h1{font-size:15px;margin:0}
+.mut{color:var(--mut)}
+input,button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:4px 10px}
+button{cursor:pointer}button.pri{background:var(--acc);color:#fff;border-color:var(--acc)}
+main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;padding:16px}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.stage{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+.task{font-size:16px;margin:0 0 8px}.task b{color:var(--box)}
+canvas{width:100%;height:auto;display:block;cursor:crosshair;border-radius:6px;touch-action:none}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.state{font-weight:600}.state.box{color:var(--ok)}.state.not_visible{color:var(--warn)}.state.unsure{color:var(--bad)}
+aside{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px}
+aside h2{font-size:14px;margin:0 0 6px}aside ul{padding-left:18px;margin:6px 0 12px}
+kbd{border:1px solid var(--line);border-radius:4px;padding:0 5px;font:12px monospace}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--ok)}
+</style></head><body>
+<header>
+  <h1>Gold label review · __SHARD__</h1>
+  <label class="mut">Reviewer <input id="who" placeholder="your name" size="12"></label>
+  <span id="prog" class="mut"></span>
+  <button id="exp" class="pri">Export CSV</button>
+</header>
+<main>
+  <section class="stage">
+    <p class="task" id="task"></p>
+    <canvas id="cv" width="640" height="480"></canvas>
+    <div class="row">
+      <button id="prev">◀ Prev</button>
+      <button id="next">Next ▶</button>
+      <button id="nv">Not visible (N)</button>
+      <button id="un">Unsure (U)</button>
+      <button id="tr">Cut by image edge (T)</button>
+      <button id="clr">Clear (Backspace)</button>
+      <button id="acc" hidden>Accept proposal (A)</button>
+      <span id="st" class="state"></span>
+    </div>
+  </section>
+  <aside>
+    <h2>How to label</h2>
+    <ul>
+      <li>One box per frame, around the <b>staged object named above</b> only - not other cars, barriers or curbs in the background.</li>
+      <li>Drag a <b>tight</b> box around the visible part. Redraw to correct.</li>
+      <li>Exclude shadows. Include the object's own stand or base plate.</li>
+      <li>Object partly outside the image: box the visible part and press <kbd>T</kbd>.</li>
+      <li>Object not in the image (passed under the bumper, too far to see): <kbd>N</kbd>.</li>
+      <li>Cannot decide: <kbd>U</kbd> - better than guessing.</li>
+    </ul>
+    <h2>Keys</h2>
+    <p><kbd>→</kbd>/<kbd>Enter</kbd> next · <kbd>←</kbd> previous · <kbd>N</kbd> <kbd>U</kbd> <kbd>T</kbd> · <kbd>Backspace</kbd> clear</p>
+    <h2>Progress</h2>
+    <div class="bar"><i id="pbar" style="width:0"></i></div>
+    <p class="mut" id="pdetail"></p>
+    <p class="mut">Work is saved in this browser automatically. When done, press <b>Export CSV</b> and send the file back.</p>
+  </aside>
+</main>
+<script>
+const ITEMS = __ITEMS__;
+const KEY = "gold-review-" + "__SHARD__";
+let S = {}; try { S = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+let i = Math.max(0, ITEMS.findIndex(it => !S[it.id]));
+if (i < 0) i = 0;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const who = document.getElementById("who");
+try { who.value = localStorage.getItem("gold-reviewer") || ""; } catch (e) {}
+who.onchange = () => { try { localStorage.setItem("gold-reviewer", who.value); } catch (e) {} };
+const img = new Image();
+let drag = null;
+
+function rec() { return S[ITEMS[i].id] || null; }
+function draw() {
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  const r = rec(), b = drag || (r && r.status === "box" ? r : null);
+  const pre = ITEMS[i].pre;
+  if (!r && !drag && pre && pre.status === "box") {
+    ctx.save(); ctx.setLineDash([8, 6]); ctx.lineWidth = 2; ctx.strokeStyle = "#2d5bd7";
+    ctx.strokeRect(pre.x0, pre.y0, pre.x1 - pre.x0, pre.y1 - pre.y0); ctx.restore();
+  }
+  if (b) {
+    ctx.lineWidth = 3; ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--box");
+    ctx.strokeRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+  }
+}
+function show() {
+  const it = ITEMS[i];
+  document.getElementById("task").innerHTML =
+    `Box the <b>${it.what}</b> <span class="mut">· ${it.side} ${it.trace} · frame ${it.frame} · ${it.dist} m · ${i + 1}/${ITEMS.length}</span>`
+    + (it.pre ? `<br><span class="mut">Proposal (dashed blue): ${it.pre.status === "box" ? "box" : "not visible"} - press A if correct, otherwise label it yourself.</span>` : "");
+  document.getElementById("acc").hidden = !it.pre;
+  img.onload = () => { cv.width = img.naturalWidth; cv.height = img.naturalHeight; draw(); };
+  img.src = "images/" + it.id + ".jpg";
+  const r = rec(), st = document.getElementById("st");
+  st.className = "state " + (r ? r.status : "");
+  st.textContent = r ? (r.status === "box" ? "box" + (r.truncated ? " · cut by edge" : "") :
+                       r.status === "not_visible" ? "not visible" : "unsure") : "not labeled";
+  const done = ITEMS.filter(x => S[x.id]).length;
+  document.getElementById("prog").textContent = `${done}/${ITEMS.length} done`;
+  document.getElementById("pbar").style.width = (100 * done / ITEMS.length) + "%";
+  document.getElementById("pdetail").textContent = `${done} of ${ITEMS.length} frames labeled`;
+}
+function pos(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: Math.round((e.clientX - r.left) * cv.width / r.width),
+           y: Math.round((e.clientY - r.top) * cv.height / r.height) };
+}
+function setRec(v) { S[ITEMS[i].id] = { ...v, t: new Date().toISOString() }; save(); show(); draw(); }
+cv.addEventListener("pointerdown", e => { const p = pos(e); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => { if (!drag) return; const p = pos(e); drag.x1 = p.x; drag.y1 = p.y; draw(); });
+cv.addEventListener("pointerup", () => {
+  if (!drag) return;
+  const b = { x0: Math.min(drag.x0, drag.x1), y0: Math.min(drag.y0, drag.y1),
+              x1: Math.max(drag.x0, drag.x1), y1: Math.max(drag.y0, drag.y1) };
+  drag = null;
+  if (b.x1 - b.x0 < 3 || b.y1 - b.y0 < 3) { draw(); return; }
+  const r = rec();
+  setRec({ status: "box", ...b, truncated: !!(r && r.truncated) });
+});
+const go = d => { i = Math.min(ITEMS.length - 1, Math.max(0, i + d)); show(); };
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("nv").onclick = () => setRec({ status: "not_visible" });
+document.getElementById("un").onclick = () => setRec({ status: "unsure" });
+document.getElementById("tr").onclick = () => { const r = rec(); if (r && r.status === "box") setRec({ ...r, truncated: !r.truncated }); };
+document.getElementById("acc").onclick = () => {
+  const pre = ITEMS[i].pre;
+  if (pre) setRec(pre.status === "box" ? { status: "box", x0: pre.x0, y0: pre.y0, x1: pre.x1, y1: pre.y1, truncated: !!pre.truncated, accepted: true }
+                                       : { status: pre.status, accepted: true });
+};
+document.getElementById("clr").onclick = () => { delete S[ITEMS[i].id]; save(); show(); draw(); };
+document.addEventListener("keydown", e => {
+  if (e.target === who) return;
+  const k = e.key.toLowerCase();
+  if (k === "arrowright" || k === "enter") go(1);
+  else if (k === "arrowleft") go(-1);
+  else if (k === "n") document.getElementById("nv").click();
+  else if (k === "u") document.getElementById("un").click();
+  else if (k === "t") document.getElementById("tr").click();
+  else if (k === "a" && ITEMS[i].pre) document.getElementById("acc").click();
+  else if (k === "backspace") { e.preventDefault(); document.getElementById("clr").click(); }
+});
+document.getElementById("exp").onclick = () => {
+  if (!who.value.trim()) { alert("Enter your name first."); who.focus(); return; }
+  const head = ["item_id", "side", "trace", "frame_idx", "category", "reviewer", "status", "x0", "y0", "x1", "y1", "truncated", "time"];
+  const rows = [head.join(",")];
+  ITEMS.forEach(it => {
+    const r = S[it.id];
+    if (!r) return;
+    rows.push([it.id, it.side, it.trace, it.frame, it.category, JSON.stringify(who.value.trim()), r.status,
+               r.x0 ?? "", r.y0 ?? "", r.x1 ?? "", r.y1 ?? "", r.truncated ? 1 : 0, r.t].join(","));
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = `gold_${"__SHARD__".replace(/\W+/g, "_")}_${who.value.trim().replace(/\W+/g, "_")}.csv`;
+  a.click();
+};
+show();
+</script></body></html>
