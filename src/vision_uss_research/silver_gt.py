@@ -90,7 +90,9 @@ def combine(sam_box, qwen_visible, qwen_box, img_wh: tuple[int, int],
         if iou >= agree_iou:
             x0, y0, x1, y1 = (float(v) for v in sam_box)
             w, h = img_wh
-            cut = x0 <= edge or y0 <= edge or x1 >= w - 1 - edge or y1 >= h - 1 - edge
+            # cut = leaves the view at the bottom or sides; running past the top
+            # edge is normal for tall objects at bumper height
+            cut = x0 <= edge or x1 >= w - 1 - edge or y1 >= h - 1 - edge
             out.update(status="box", x0=x0, y0=y0, x1=x1, y1=y1, truncated=int(cut))
         else:
             out["reason"] = "boxes differ"

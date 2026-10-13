@@ -48,6 +48,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--prefill", type=Path, default=None,
                         help="audit mode: silver.csv whose labels are shown as proposals")
+    parser.add_argument("--proposals", type=Path, default=None,
+                        help="silver run dir (sam3.csv, qwen.csv): show SAM3 (A) and Qwen (Q) "
+                             "answers as two proposals")
+    parser.add_argument("--only-items", type=Path, default=None,
+                        help="CSV with an item_id column: review only these frames")
     parser.add_argument("--sample", type=int, default=0,
                         help="audit mode: review only this many random prefilled frames")
     args = parser.parse_args()
@@ -55,7 +60,24 @@ def main() -> None:
     cfg = yaml.safe_load(args.config.read_text())
     frames = pd.read_csv(args.bundle / "frames.csv")
     items = select_test_items(frames, cfg["split"], args.step)
+    if args.only_items is not None:
+        items = items[items["item_id"].isin(set(pd.read_csv(args.only_items)["item_id"]))]
     pre = {}
+    pre2 = {}
+    if args.proposals is not None:
+        def prop(x, ok):
+            if not ok:
+                return {"status": "not_visible"}
+            b = [float(v) for v in x]
+            # "cut by edge" is the reviewer's call (T), never pre-set by a proposal
+            return {"status": "box", "x0": b[0], "y0": b[1], "x1": b[2], "y1": b[3], "truncated": 0}
+        sam = pd.read_csv(args.proposals / "sam3.csv").set_index("item_id")
+        qw = pd.read_csv(args.proposals / "qwen.csv").set_index("item_id")
+        for iid in sam.index.intersection(qw.index):
+            s_ = sam.loc[iid]
+            q_ = qw.loc[iid]
+            pre[iid] = prop(s_[["sam_x0", "sam_y0", "sam_x1", "sam_y1"]], pd.notna(s_["sam_x0"]))
+            pre2[iid] = prop(q_[["qwen_x0", "qwen_y0", "qwen_x1", "qwen_y1"]], pd.notna(q_["qwen_x0"]))
     if args.prefill is not None:
         sv = pd.read_csv(args.prefill)
         sv = sv[sv["status"].isin(["box", "not_visible"])]
@@ -100,7 +122,9 @@ def main() -> None:
                          "frame": int(it.frame_idx), "category": it.label_class,
                          "what": CATEGORY_TEXT.get(it.label_class, it.label_class),
                          "dist": round(float(it.dist_m), 2),
-                         **({"pre": pre[it.item_id]} if it.item_id in pre else {})})
+                         **({"pre": pre[it.item_id]} if it.item_id in pre else {}),
+                         **({"pre2": pre2[it.item_id], "preName": "SAM3", "pre2Name": "Qwen"}
+                            if it.item_id in pre2 else {})})
         html = (template.replace("__SHARD__", f"{args.name} shard {r + 1}")
                 .replace("__ITEMS__", json.dumps(recs)))
         (sdir / "index.html").write_text(html, encoding="utf-8")

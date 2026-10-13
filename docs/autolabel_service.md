@@ -51,6 +51,20 @@ SAM3 is later added to the service, rate with Qwen and the audit instead. A
 proposal shown, `A` accepts) measures silver accuracy, reported first in the
 rating (`rate_autolabel.py --audit-dir`).
 
+## Click-and-track ground truth (notebook 19)
+
+The densest and most reliable option: one click per trace on the object
+(~3 m), the SAM3 video tracker follows it forward until it leaves the view
+and backward to where it appears - a box or "not visible" for every frame
+(8,729 frames on the 24 test traces). Tracking runs in 200-frame chunks
+re-seeded with the last box; once the object is lost for 8 frames it stays
+"not visible", so the tracker cannot re-lock onto a look-alike. A filmstrip per
+trace is reviewed; corrections are extra clicks (each frame takes the nearest
+click's track) or "not visible after/before frame X". Output
+`gold/clicktrack_v1/clicktrack_gold.csv` feeds `rate_autolabel.py --gold-dir`.
+With every frame labeled, the 2-4 m band uses all its frames and false labels
+per hour are exact.
+
 ## KPIs (`scripts/rate_autolabel.py`, `src/vision_uss_research/label_kpi.py`)
 
 Per pipeline, per category x distance band (0-1, 1-2, 2-4, 4-8 m) and overall:

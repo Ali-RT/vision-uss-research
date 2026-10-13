@@ -205,11 +205,22 @@ def auto_accept(p: np.ndarray, y: np.ndarray, target_precision: float = 0.98
 # TPR is computed per frame, averaged within each sequence, then over
 # sequences; FPR counts each false object once and normalizes by time.
 
+def edge_cut(df: pd.DataFrame, w: int = 640, h: int = 480, edge: float = 2.0) -> pd.Series:
+    """Object cut off at the bottom or a side of the image (flagged and the
+    gold box really touches that edge). Running past the top edge is normal
+    for tall objects at bumper height and does not count."""
+    flagged = df["truncated"].fillna(0).astype(float) > 0
+    if not all(c in df.columns for c in BOX):
+        return flagged
+    touches = (df["x0"] <= edge) | (df["x1"] >= w - 1 - edge) | (df["y1"] >= h - 1 - edge)
+    return flagged & touches.fillna(False)
+
+
 def tpr_per_sequence(scored: pd.DataFrame, by: list[str]) -> pd.DataFrame:
     """Per trace: correct / visible over frames whose object is completely in
     view (gold 'cut by image edge' left out); then the mean over traces per
     group, with the trace count and the worst trace."""
-    full = scored[scored["visible"] & (scored["truncated"].fillna(0) == 0)]
+    full = scored[scored["visible"] & ~edge_cut(scored)]
     per = (full.groupby(by + ["side", "trace"], observed=True)["correct"]
            .mean().rename("tpr").reset_index())
     return (per.groupby(by, observed=True)["tpr"]

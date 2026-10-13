@@ -74,6 +74,9 @@ def main() -> None:
     parser.add_argument("--bands", type=float, nargs="+", default=BANDS,
                         help="distance band edges in m (the deck's ROI rings)")
     parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument("--override-dir", type=Path, default=None,
+                        help="human CSVs that replace the gold for the frames they cover "
+                             "(e.g. adjudicated silver disputes)")
     parser.add_argument("--audit-dir", type=Path, default=None,
                         help="human audit CSVs of silver ground truth (notebook 18)")
     args = parser.parse_args()
@@ -84,6 +87,12 @@ def main() -> None:
     if not files:
         sys.exit(f"no gold CSVs in {args.gold_dir} (reviewers' exported gold_*.csv files)")
     reviews = pd.concat([pd.read_csv(p) for p in files], ignore_index=True)
+    if args.override_dir is not None:
+        human = pd.concat([pd.read_csv(p) for p in sorted(args.override_dir.glob("*.csv"))],
+                          ignore_index=True)
+        reviews = pd.concat([reviews[~reviews["item_id"].isin(set(human["item_id"]))], human],
+                            ignore_index=True)
+        print(f"override: {human['item_id'].nunique()} frames from human review")
     gold, agree = resolve_gold(reviews)
     dist = pd.read_csv(args.bundle / "frames.csv", usecols=KEY + ["dist_m"])
     gold = gold.merge(dist, on=KEY, how="left")

@@ -99,3 +99,10 @@ def test_audit_silver():
         {"item_id": "c", "status": "not_visible", "x0": np.nan, "y0": np.nan, "x1": np.nan, "y1": np.nan}])
     r = audit_silver(silver, audit)
     assert r.loc["all", "audited"] == 3 and abs(r.loc["all", "confirmed"] - 2 / 3) < 1e-3
+
+
+def test_edge_cut_ignores_top_edge():
+    from vision_uss_research.label_kpi import edge_cut
+    df = pd.DataFrame({"truncated": [1, 1, 1, 0], "x0": [300, 300, 0, 0], "y0": [0, 100, 100, 0],
+                       "x1": [340, 340, 200, 200], "y1": [200, 479, 300, 479]})
+    assert edge_cut(df).tolist() == [False, True, True, False]

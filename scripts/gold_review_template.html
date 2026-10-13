@@ -20,6 +20,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;padding:16p
 .task{font-size:16px;margin:0 0 8px}.task b{color:var(--box)}
 canvas{width:100%;height:auto;display:block;cursor:crosshair;border-radius:6px;touch-action:none}
 .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+button.on{background:var(--warn);color:#fff;border-color:var(--warn)}
 .state{font-weight:600}.state.box{color:var(--ok)}.state.not_visible{color:var(--warn)}.state.unsure{color:var(--bad)}
 aside{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px}
 aside h2{font-size:14px;margin:0 0 6px}aside ul{padding-left:18px;margin:6px 0 12px}
@@ -44,6 +45,7 @@ kbd{border:1px solid var(--line);border-radius:4px;padding:0 5px;font:12px monos
       <button id="tr">Cut by image edge (T)</button>
       <button id="clr">Clear (Backspace)</button>
       <button id="acc" hidden>Accept proposal (A)</button>
+      <button id="acc2" hidden>Accept red proposal (Q)</button>
       <span id="st" class="state"></span>
     </div>
   </section>
@@ -53,8 +55,9 @@ kbd{border:1px solid var(--line);border-radius:4px;padding:0 5px;font:12px monos
       <li>One box per frame, around the <b>staged object named above</b> only - not other cars, barriers or curbs in the background.</li>
       <li>Drag a <b>tight</b> box around the visible part. Redraw to correct.</li>
       <li>Exclude shadows. Include the object's own stand or base plate.</li>
-      <li>Object partly outside the image: box the visible part and press <kbd>T</kbd>.</li>
+      <li>Object cut off at the <b>bottom or a side</b> of the image: box the visible part and press <kbd>T</kbd>. A tall object running past the <b>top</b> edge is normal - no <kbd>T</kbd>.</li>
       <li>Object not in the image (passed under the bumper, too far to see): <kbd>N</kbd>.</li>
+      <li>Only the object the vehicle is approaching counts. If it has already passed out of view and only <b>similar objects further away</b> are visible (e.g. other wheel stops across the parking lot): <kbd>N</kbd>.</li>
       <li>Cannot decide: <kbd>U</kbd> - better than guessing.</li>
     </ul>
     <h2>Keys</h2>
@@ -62,6 +65,11 @@ kbd{border:1px solid var(--line);border-radius:4px;padding:0 5px;font:12px monos
     <h2>Progress</h2>
     <div class="bar"><i id="pbar" style="width:0"></i></div>
     <p class="mut" id="pdetail"></p>
+    <h2>Start over</h2>
+    <div class="row" style="margin-top:0">
+      <button id="rcat">Reset this object's frames</button>
+      <button id="rall">Reset all</button>
+    </div>
     <p class="mut">Work is saved in this browser automatically. When done, press <b>Export CSV</b> and send the file back.</p>
   </aside>
 </main>
@@ -78,16 +86,20 @@ try { who.value = localStorage.getItem("gold-reviewer") || ""; } catch (e) {}
 who.onchange = () => { try { localStorage.setItem("gold-reviewer", who.value); } catch (e) {} };
 const img = new Image();
 let drag = null;
+let pendingCut = false;   // T pressed before the box was drawn
 
 function rec() { return S[ITEMS[i].id] || null; }
+// an accepted proposal never carries a cut flag unless the reviewer pressed T
+function isCut(r) { return !!r.truncated && (!r.accepted || !!r.cutSetByReviewer); }
 function draw() {
   ctx.drawImage(img, 0, 0, cv.width, cv.height);
   const r = rec(), b = drag || (r && r.status === "box" ? r : null);
-  const pre = ITEMS[i].pre;
-  if (!r && !drag && pre && pre.status === "box") {
-    ctx.save(); ctx.setLineDash([8, 6]); ctx.lineWidth = 2; ctx.strokeStyle = "#2d5bd7";
-    ctx.strokeRect(pre.x0, pre.y0, pre.x1 - pre.x0, pre.y1 - pre.y0); ctx.restore();
-  }
+  [[ITEMS[i].pre, "#2d5bd7"], [ITEMS[i].pre2, "#d23b3b"]].forEach(([p, col]) => {
+    if (!r && !drag && p && p.status === "box") {
+      ctx.save(); ctx.setLineDash([8, 6]); ctx.lineWidth = 2; ctx.strokeStyle = col;
+      ctx.strokeRect(p.x0, p.y0, p.x1 - p.x0, p.y1 - p.y0); ctx.restore();
+    }
+  });
   if (b) {
     ctx.lineWidth = 3; ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--box");
     ctx.strokeRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
@@ -97,13 +109,24 @@ function show() {
   const it = ITEMS[i];
   document.getElementById("task").innerHTML =
     `Box the <b>${it.what}</b> <span class="mut">· ${it.side} ${it.trace} · frame ${it.frame} · ${it.dist} m · ${i + 1}/${ITEMS.length}</span>`
-    + (it.pre ? `<br><span class="mut">Proposal (dashed blue): ${it.pre.status === "box" ? "box" : "not visible"} - press A if correct, otherwise label it yourself.</span>` : "");
+    + (it.pre ? `<br><span class="mut">${it.pre2 ? (it.preName || "Blue") : "Proposal"} (dashed blue): <b>${it.pre.status === "box" ? "box" : "not visible"}</b> - press A to accept` : "")
+    + (it.pre2 ? ` · ${it.pre2Name || "Red"} (dashed red): <b>${it.pre2.status === "box" ? "box" : "not visible"}</b> - press Q to accept` : "")
+    + (it.pre ? `. If both are wrong, draw the box yourself or press N.</span>` : "");
   document.getElementById("acc").hidden = !it.pre;
+  document.getElementById("acc2").hidden = !it.pre2;
+  if (it.pre2) {
+    document.getElementById("acc").textContent = `Accept ${it.preName || "blue"} (A)`;
+    document.getElementById("acc2").textContent = `Accept ${it.pre2Name || "red"} (Q)`;
+  }
   img.onload = () => { cv.width = img.naturalWidth; cv.height = img.naturalHeight; draw(); };
   img.src = "images/" + it.id + ".jpg";
   const r = rec(), st = document.getElementById("st");
+  const cut = r && r.status === "box" ? isCut(r) : pendingCut;
+  const trb = document.getElementById("tr");
+  trb.classList.toggle("on", cut);
+  trb.textContent = cut ? "Cut by image edge: ON (T)" : "Cut by image edge (T)";
   st.className = "state " + (r ? r.status : "");
-  st.textContent = r ? (r.status === "box" ? "box" + (r.truncated ? " · cut by edge" : "") :
+  st.textContent = r ? (r.status === "box" ? "box" + (isCut(r) ? " · cut by edge" : "") :
                        r.status === "not_visible" ? "not visible" : "unsure") : "not labeled";
   const done = ITEMS.filter(x => S[x.id]).length;
   document.getElementById("prog").textContent = `${done}/${ITEMS.length} done`;
@@ -125,20 +148,30 @@ cv.addEventListener("pointerup", () => {
   drag = null;
   if (b.x1 - b.x0 < 3 || b.y1 - b.y0 < 3) { draw(); return; }
   const r = rec();
-  setRec({ status: "box", ...b, truncated: !!(r && r.truncated) });
+  setRec({ status: "box", ...b, truncated: !!(r && r.truncated) || pendingCut });
+  pendingCut = false;
 });
-const go = d => { i = Math.min(ITEMS.length - 1, Math.max(0, i + d)); show(); };
+const go = d => { i = Math.min(ITEMS.length - 1, Math.max(0, i + d)); pendingCut = false; show(); };
 document.getElementById("next").onclick = () => go(1);
 document.getElementById("prev").onclick = () => go(-1);
 document.getElementById("nv").onclick = () => setRec({ status: "not_visible" });
 document.getElementById("un").onclick = () => setRec({ status: "unsure" });
-document.getElementById("tr").onclick = () => { const r = rec(); if (r && r.status === "box") setRec({ ...r, truncated: !r.truncated }); };
-document.getElementById("acc").onclick = () => {
-  const pre = ITEMS[i].pre;
-  if (pre) setRec(pre.status === "box" ? { status: "box", x0: pre.x0, y0: pre.y0, x1: pre.x1, y1: pre.y1, truncated: !!pre.truncated, accepted: true }
+document.getElementById("tr").onclick = () => {
+  const r = rec();
+  if (r && r.status === "box") setRec({ ...r, truncated: !isCut(r), cutSetByReviewer: true });
+  else { pendingCut = !pendingCut; show(); }   // applied to the box drawn next
+};
+const acceptPre = pre => {
+  if (pre) setRec(pre.status === "box" ? { status: "box", x0: pre.x0, y0: pre.y0, x1: pre.x1, y1: pre.y1, truncated: false, accepted: true }
                                        : { status: pre.status, accepted: true });
 };
-document.getElementById("clr").onclick = () => { delete S[ITEMS[i].id]; save(); show(); draw(); };
+document.getElementById("acc2").onclick = () => acceptPre(ITEMS[i].pre2);
+document.getElementById("acc").onclick = () => {
+  const pre = ITEMS[i].pre;
+  if (pre) setRec(pre.status === "box" ? { status: "box", x0: pre.x0, y0: pre.y0, x1: pre.x1, y1: pre.y1, truncated: false, accepted: true }
+                                       : { status: pre.status, accepted: true });
+};
+document.getElementById("clr").onclick = () => { delete S[ITEMS[i].id]; pendingCut = false; save(); show(); draw(); };
 document.addEventListener("keydown", e => {
   if (e.target === who) return;
   const k = e.key.toLowerCase();
@@ -148,17 +181,33 @@ document.addEventListener("keydown", e => {
   else if (k === "u") document.getElementById("un").click();
   else if (k === "t") document.getElementById("tr").click();
   else if (k === "a" && ITEMS[i].pre) document.getElementById("acc").click();
+  else if (k === "q" && ITEMS[i].pre2) document.getElementById("acc2").click();
   else if (k === "backspace") { e.preventDefault(); document.getElementById("clr").click(); }
 });
+function resetWhere(pred, what) {
+  const ids = ITEMS.filter(pred).map(it => it.id).filter(id => S[id]);
+  if (!ids.length) { alert("Nothing to reset."); return; }
+  if (!confirm(`Clear ${ids.length} labeled frame(s) of ${what}? This cannot be undone.`)) return;
+  ids.forEach(id => delete S[id]);
+  save();
+  i = Math.max(0, ITEMS.findIndex(it => !S[it.id]));
+  pendingCut = false; show(); draw();
+}
+document.getElementById("rcat").onclick = () => {
+  const cat = ITEMS[i].category;
+  resetWhere(it => it.category === cat, ITEMS[i].what);
+};
+document.getElementById("rall").onclick = () => resetWhere(() => true, "this shard");
 document.getElementById("exp").onclick = () => {
   if (!who.value.trim()) { alert("Enter your name first."); who.focus(); return; }
-  const head = ["item_id", "side", "trace", "frame_idx", "category", "reviewer", "status", "x0", "y0", "x1", "y1", "truncated", "time"];
+  const head = ["item_id", "side", "trace", "frame_idx", "category", "reviewer", "status", "x0", "y0", "x1", "y1", "truncated", "time", "accepted"];
   const rows = [head.join(",")];
   ITEMS.forEach(it => {
     const r = S[it.id];
     if (!r) return;
     rows.push([it.id, it.side, it.trace, it.frame, it.category, JSON.stringify(who.value.trim()), r.status,
-               r.x0 ?? "", r.y0 ?? "", r.x1 ?? "", r.y1 ?? "", r.truncated ? 1 : 0, r.t].join(","));
+               r.x0 ?? "", r.y0 ?? "", r.x1 ?? "", r.y1 ?? "",
+               isCut(r) ? 1 : 0, r.t, r.accepted ? 1 : 0].join(","));
   });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
