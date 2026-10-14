@@ -358,17 +358,24 @@ def experiment_config(cfg: dict, name: str) -> dict:
     return out
 
 
-def data_config(cfg: dict, replay_frac: float) -> dict:
-    return {**{k: cfg[k] for k in DATA_KEYS}, "replay_frac": replay_frac}
+def data_config(cfg: dict, replay_frac: float, labels: str = "auto") -> dict:
+    """Everything that shapes a training dataset. `labels`: 'auto' (detector,
+    YOLOE, SAM3 merge) or 'clicktrack' (notebook 19's human-checked tracks);
+    it only enters the config when not 'auto', so earlier dataset ids hold."""
+    out = {**{k: cfg[k] for k in DATA_KEYS}, "replay_frac": replay_frac}
+    if labels != "auto":
+        out.update(labels=labels, clicktrack_labels=cfg.get("clicktrack_labels"))
+    return out
 
 
-def dataset_id(cfg: dict, replay_frac: float) -> str:
+def dataset_id(cfg: dict, replay_frac: float, labels: str = "auto") -> str:
     """Dataset folder name: the replay share in clear plus a hash of every
     other data-shaping key, so two runs share a dataset only when their
     training data would be identical."""
-    digest = hashlib.sha1(json.dumps(data_config(cfg, replay_frac), sort_keys=True,
+    digest = hashlib.sha1(json.dumps(data_config(cfg, replay_frac, labels), sort_keys=True,
                                      default=str).encode()).hexdigest()[:6]
-    return f"dataset_{cfg['tag']}_r{round(replay_frac * 100):03d}_{digest}"
+    tag = "" if labels == "auto" else f"_{labels}"
+    return f"dataset_{cfg['tag']}{tag}_r{round(replay_frac * 100):03d}_{digest}"
 
 
 def _canonical(obj) -> str:

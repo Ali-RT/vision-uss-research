@@ -235,3 +235,13 @@ def test_spec_eval_localized_is_unknown_without_labels():
                        "px0": 1.0, "py0": 1.0, "px1": 9.0, "py1": 9.0})
     pt, _ = spec_eval(df)
     assert pt["passes_loc"].iloc[0] is None and bool(pt["passes"].iloc[0])
+
+
+def test_dataset_id_label_source_keeps_auto_ids():
+    from vision_uss_research.cuv_finetune import dataset_id
+    cfg = _cfg()
+    cfg["clicktrack_labels"] = "gold/x.csv"
+    auto = dataset_id(cfg, 0.35)
+    ct = dataset_id(cfg, 0.35, "clicktrack")
+    assert auto == dataset_id(_cfg(), 0.35)          # unchanged for auto labels
+    assert ct.startswith("dataset_cuv_v1_clicktrack_r035_") and ct != auto

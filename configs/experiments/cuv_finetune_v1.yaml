@@ -10,6 +10,9 @@ tag: cuv_v1
 bundle: cuv_objectcheck/cuv_bundle_v1.zip
 base_dataset: datasets/20260718_dataset_v2
 base_model: models/20260719_train_yolo_v1/train/weights/best.pt
+# notebook 19 click-and-track labels for the 48 training/val traces (never the
+# 24 test traces); used by experiments with `labels: clicktrack`
+clicktrack_labels: gold/clicktrack_v1/clicktrack_train.csv
 
 # tracelist object -> dataset_v2 training class (null = left out of training)
 class_map:
@@ -82,6 +85,14 @@ experiments:
     optimizer: SGD
     lr0: 0.001
     warmup_epochs: 0
+  yolo11s_ft_ct:          # same recipe as yolo11s_ft_v2, but CUV labels from
+    init: base_model      #   notebook 19 (human-checked tracks; curbs boxed on
+    epochs: 10            #   the curb) - isolates the effect of label quality
+    replay_frac: 0.35
+    optimizer: SGD
+    lr0: 0.001
+    warmup_epochs: 0
+    labels: clicktrack
   yolo26s_full:           # fair YOLO26s test: COCO start, all of dataset_v2
     init: yolo26s.pt
     epochs: 60
