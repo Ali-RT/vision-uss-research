@@ -70,3 +70,30 @@ def test_box_hit_padding():
     assert box_hit(105, 210, 100, 100, 200, 200)                 # just below bottom edge
     assert not box_hit(50, 150, 100, 100, 200, 200)
     assert not box_hit(150, 260, 100, 100, 200, 200)             # far below
+
+
+def test_region_box_extends_above_ground_point_and_clips():
+    from vision_uss_research.method.uss_prompt import region_box
+    assert region_box(480, 400, 960, 640) == (320, 150, 640, 500)
+    assert region_box(50, 600, 960, 640) == (0, 350, 210, 640)        # clipped
+
+
+def test_mask_box():
+    from vision_uss_research.method.uss_prompt import mask_box
+    m = np.zeros((10, 20), bool); m[2:5, 3:8] = True
+    assert mask_box(m) == (3, 2, 8, 5)
+    assert mask_box(np.zeros((4, 4), bool)) is None
+
+
+def test_track_target_slots_prefers_approaching_track():
+    import pandas as pd
+    from vision_uss_research.method.uss_prompt import track_target_slots
+    rows = []
+    for i in range(6):
+        rows.append(("s", "front", 1, i, 3000 - 500 * i, 100))      # approaching target
+        rows.append(("s", "front", 2, i, 200, 50))                   # static clutter at bumper
+        rows.append(("s", "front", 3, i, 2800 - 500 * i, 2500))      # approaching, off-corridor
+    df = pd.DataFrame(rows, columns=["sequence_id", "camera", "slot", "frame_idx",
+                                     "range_mm", "mid_y"])
+    out = track_target_slots(df)
+    assert out.slot.tolist() == [1]

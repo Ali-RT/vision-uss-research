@@ -155,32 +155,54 @@ def fit_ground_camera(x_mm, y_mm, u, v, camera: str,
                       f_scale_px: float = 15.0) -> tuple[GroundCamera, dict]:
     """Robust least squares of image points (u, v) against ground points.
 
-    Weak priors keep the under-determined directions sane (yc ~ 0, yaw ~ 0,
-    k1 ~ 0); the soft-L1 loss tolerates wrong slot/box pairings."""
+    The corpus cameras are NOT bumper mounts (the front one sees the hood:
+    windshield / rear-window rigs), so mount position and height get wide
+    bounds and the fit is multi-started over mount x, height, focal length
+    and pitch; the lowest robust cost wins. Weak priors keep the
+    under-determined directions sane (yc ~ 0, yaw ~ 0, k1 ~ 0); the soft-L1
+    loss tolerates wrong slot/box pairings."""
     from scipy.optimize import least_squares
 
-    cam0 = init or GroundCamera.initial(camera)
+    base = init or GroundCamera.initial(camera)
     x_mm, y_mm = np.asarray(x_mm, float), np.asarray(y_mm, float)
     u, v = np.asarray(u, float), np.asarray(v, float)
     n = max(len(u), 1)
     prior_w = np.sqrt(n) * 0.05
 
     def resid(p):
-        cam = cam0.with_vector(p)
+        cam = base.with_vector(p)
         pu, pv, ok = cam.project(x_mm, y_mm)
         r = np.concatenate([np.where(ok, pu - u, 500.0), np.where(ok, pv - v, 500.0)])
         prior = prior_w * np.array([cam.yc / 300.0, cam.yaw / np.radians(5.0),
                                     cam.k1 / 0.2])
         return np.concatenate([r, prior])
 
-    lo = [100, 0, 0, cam0.xc - 1500, -1500, 200, np.radians(-20), np.radians(-30), -0.6]
-    hi = [3000, 1920, 1280, cam0.xc + 1500, 1500, 1500, np.radians(60), np.radians(30), 0.6]
-    sol = least_squares(resid, cam0.vector(), bounds=(lo, hi), loss="soft_l1",
-                        f_scale=f_scale_px)
-    cam = cam0.with_vector(sol.x)
+    lo = [150, 0, 0, -6000, -1500, 200, np.radians(-20), np.radians(-30), -0.6]
+    hi = [3000, 1920, 1280, 6000, 1500, 2500, np.radians(70), np.radians(30), 0.6]
+    bumper = FRONT_BUMPER_MM if base.facing > 0 else REAR_BUMPER_MM
+    inner = 1800.0 if base.facing > 0 else -300.0      # windshield / rear window
+    starts = []
+    if init is not None:
+        starts.append(init.vector())
+    for xc in (bumper - base.facing * 200, inner):
+        for h in (600.0, 1300.0):
+            for f in (400.0, 900.0):
+                for pitch in (np.radians(5), np.radians(20)):
+                    s = base.vector()
+                    s[[0, 3, 5, 6]] = (f, xc, h, pitch)
+                    starts.append(s)
+    best = None
+    for s in starts:
+        s = np.clip(s, lo, hi)
+        sol = least_squares(resid, s, bounds=(lo, hi), loss="soft_l1", f_scale=f_scale_px)
+        if best is None or sol.cost < best.cost:
+            best = sol
+    cam = base.with_vector(best.x)
     pu, pv, ok = cam.project(x_mm, y_mm)
     err = np.hypot(pu - u, pv - v)[ok]
-    return cam, {"n": int(len(u)), "success": bool(sol.success),
+    at_bound = [nm for nm, val, a, b in zip(GroundCamera.PARAMS, best.x, lo, hi)
+                if np.isclose(val, a, rtol=1e-3) or np.isclose(val, b, rtol=1e-3)]
+    return cam, {"n": int(len(u)), "success": bool(best.success), "at_bound": at_bound,
                  "median_px": float(np.median(err)) if err.size else float("nan"),
                  "p90_px": float(np.percentile(err, 90)) if err.size else float("nan")}
 
@@ -194,3 +216,43 @@ def box_hit(u, v, x0, y0, x1, y1, pad: float = 0.10, below: float = 0.15):
     hgt = np.asarray(y1, float) - np.asarray(y0, float)
     return ((u >= x0 - pad * w) & (u <= x1 + pad * w)
             & (v >= y0 - pad * hgt) & (v <= y1 + below * hgt))
+
+
+def region_box(u: float, v: float, img_w: int, img_h: int, half_w: float = 160.0,
+               below: float = 100.0, above: float = 250.0) -> tuple[float, ...]:
+    """Search region around a projected near-face ground point (u, v). The
+    obstacle stands ABOVE its ground contact, so the region extends `above`
+    px up and `below` px down (projection error is ~symmetric, p80 ~100 px).
+    Clipped to the image."""
+    x0, x1 = max(0.0, u - half_w), min(float(img_w), u + half_w)
+    y0, y1 = max(0.0, v - above), min(float(img_h), v + below)
+    return (x0, y0, x1, y1)
+
+
+def mask_box(mask: np.ndarray) -> tuple[float, ...] | None:
+    """Tight (x0, y0, x1, y1) of a boolean mask; None if empty."""
+    ys, xs = np.nonzero(mask)
+    if xs.size == 0:
+        return None
+    return (float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1))
+
+
+def track_target_slots(slots, min_frames: int = 4, min_approach_mm: float = 500.0,
+                       max_lateral_mm: float = 1200.0, min_last_range_mm: float = -500.0):
+    """One target slot per (sequence, camera), chosen by its whole TRACK, not
+    per frame: seen in >= min_frames frames, range shrinking by
+    >= min_approach_mm, median |lateral| inside the corridor, and ending
+    nearest the bumper. Per-frame "nearest in corridor" picks ground/ghost
+    clutter near the bumper on many frames; the track rule mirrors the
+    autolabel track's validated slot selection.
+
+    `slots`: DataFrame with sequence_id, camera, slot, frame_idx, range_mm,
+    mid_y (notebook 20 output + range_mm). Returns sequence_id, camera, slot."""
+    g = slots.sort_values("frame_idx").groupby(["sequence_id", "camera", "slot"])
+    tr = g.agg(n=("frame_idx", "size"), r_first=("range_mm", "first"),
+               r_last=("range_mm", "last"),
+               y_med=("mid_y", lambda s: s.abs().median())).reset_index()
+    tr = tr[(tr.n >= min_frames) & (tr.r_first - tr.r_last >= min_approach_mm)
+            & (tr.y_med <= max_lateral_mm) & (tr.r_last >= min_last_range_mm)]
+    return (tr.sort_values("r_last").drop_duplicates(["sequence_id", "camera"])
+            [["sequence_id", "camera", "slot"]].reset_index(drop=True))
