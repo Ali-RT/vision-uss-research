@@ -1,0 +1,78 @@
+"""VLM-named prompts for SAM3: Qwen2.5-VL names (and boxes) the obstacle,
+SAM3 segments it with that noun.
+
+SAM3 responds to concrete nouns ("hedge", "bollard") but not to generic ones
+("object", "obstacle" - notebook 22: no candidates on 86-98% of non-cone
+frames). The VLM supplies the noun, so the pipeline stays class-agnostic.
+Asked once on the USS-region crop and once on the full frame, the comparison
+isolates what the USS region adds.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import numpy as np
+
+ARTICLES = {"a", "an", "the", "some", "this", "that"}
+
+
+def name_prompt(view: str) -> str:
+    """view: 'crop' (USS-region crop) or 'full' (whole frame, no USS)."""
+    where = ("This crop is centred where the vehicle's ultrasonic sensors detect "
+             "something. " if view == "crop" else "")
+    return (
+        "This image is from a camera mounted on a vehicle that is slowly approaching "
+        f"an obstacle while parking. {where}Name the main physical obstacle the "
+        "vehicle is approaching, as a short noun phrase of 1-3 words (for example "
+        '"hedge", "traffic cone", "parked car", "curb", "pole"), and give a tight box '
+        "around it. Ignore the road surface, markings, sky and distant background.\n"
+        'Answer with JSON only: {"name": "...", "bbox_2d": [x1, y1, x2, y2]}, or '
+        '{"name": null} if there is no obstacle.'
+    )
+
+
+def clean_name(name) -> str | None:
+    """Lower-case noun phrase for a SAM3 text prompt; None if unusable."""
+    if not isinstance(name, str):
+        return None
+    words = [w for w in re.sub(r"[^a-z0-9 \-]", " ", name.lower()).split()
+             if w not in ARTICLES]
+    if not words:
+        return None
+    return " ".join(words[:4])
+
+
+def parse_name_box(text: str, resized_wh: tuple[int, int],
+                   orig_wh: tuple[int, int]) -> tuple[str | None, np.ndarray | None]:
+    """(name, box in original pixels) from a Qwen reply. Qwen2.5-VL answers in
+    the pixel space of the image it was fed (resized to multiples of 28), so
+    boxes are scaled back. Either part may be None."""
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None, None
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None, None
+    if isinstance(obj, list):
+        obj = obj[0] if obj else {}
+    name = clean_name(obj.get("name"))
+    box = obj.get("bbox_2d")
+    if not (isinstance(box, (list, tuple)) and len(box) == 4):
+        return name, None
+    sx, sy = orig_wh[0] / resized_wh[0], orig_wh[1] / resized_wh[1]
+    b = np.array([box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy], float)
+    b = np.clip(b, 0, [orig_wh[0] - 1, orig_wh[1] - 1, orig_wh[0] - 1, orig_wh[1] - 1])
+    if b[2] - b[0] < 2 or b[3] - b[1] < 2:
+        return name, None
+    return name, b
+
+
+def padded_crop(region, img_w: int, img_h: int, pad: float = 0.2) -> tuple[int, ...]:
+    """Integer crop window: the region grown by `pad` of its size, clipped."""
+    x0, y0, x1, y1 = region
+    dw, dh = (x1 - x0) * pad, (y1 - y0) * pad
+    return (int(max(0, x0 - dw)), int(max(0, y0 - dh)),
+            int(min(img_w, x1 + dw)), int(min(img_h, y1 + dh)))
