@@ -38,3 +38,16 @@ def test_padded_crop_off_image_region_is_none():
     reg = region_box(-400, 300, 960, 640)            # projected far left of the frame
     assert reg[2] < reg[0]                           # clipping inverts it
     assert padded_crop(reg, 960, 640) is None
+
+
+def test_drive_over_and_lexicon():
+    from vision_uss_research.method.vlm_prompt import (decision_prompt, name_to_bin,
+                                                       parse_drive_over)
+    assert "drive over" in decision_prompt("full") and "ultrasonic" in decision_prompt("crop")
+    assert parse_drive_over('{"name": "curb", "drive_over": true}') is True
+    assert parse_drive_over('{"name": "pole", "drive_over": false}') is False
+    assert parse_drive_over('{"name": "pole"}') is None
+    assert name_to_bin("Concrete curb") == "low"
+    assert name_to_bin("speed bump") == "low"
+    assert name_to_bin("traffic cone") == "high"
+    assert name_to_bin(None) is None

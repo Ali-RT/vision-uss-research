@@ -82,3 +82,49 @@ def padded_crop(region, img_w: int, img_h: int, pad: float = 0.2,
     c = (int(max(0, x0 - dw)), int(max(0, y0 - dh)),
          int(min(img_w, x1 + dw)), int(min(img_h, y1 + dh)))
     return c if c[2] - c[0] >= min_px and c[3] - c[1] >= min_px else None
+
+
+def decision_prompt(view: str) -> str:
+    """name_prompt plus the drive-over judgment, in one call."""
+    where = ("This crop is centred where the vehicle's ultrasonic sensors detect "
+             "something. " if view == "crop" else "")
+    return (
+        "This image is from a camera mounted on a vehicle that is slowly approaching "
+        f"an obstacle while parking. {where}Name the main physical obstacle the "
+        "vehicle is approaching, as a short noun phrase of 1-3 words, give a tight box "
+        "around it, and say whether an ordinary passenger car could drive over it "
+        "(low obstacles under about 25 cm, such as a curb, speed bump or board lying "
+        "on the ground) or must stop (anything taller). Ignore the road surface, "
+        "markings, sky and distant background.\n"
+        'Answer with JSON only: {"name": "...", "bbox_2d": [x1, y1, x2, y2], '
+        '"drive_over": true or false}, or {"name": null} if there is no obstacle.'
+    )
+
+
+def parse_drive_over(text: str) -> bool | None:
+    """The drive_over flag from a Qwen reply; None if missing or unreadable."""
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    if isinstance(obj, list):
+        obj = obj[0] if obj else {}
+    v = obj.get("drive_over")
+    return v if isinstance(v, bool) else None
+
+
+# Nouns a VLM uses for drivable-over (< ~25 cm) things; everything else = high.
+LOW_WORDS = ("curb", "kerb", "speed bump", "bump", "board", "plank", "wood", "beam",
+             "hose", "step", "grass", "marking", "line", "manhole", "drain", "mat",
+             "rail", "wheel stop", "stopper", "pothole")
+
+
+def name_to_bin(name) -> str | None:
+    """Height bin from the VLM's noun (lexicon): 'low' | 'high' | None."""
+    n = clean_name(name)
+    if n is None:
+        return None
+    return "low" if any(w in n for w in LOW_WORDS) else "high"
