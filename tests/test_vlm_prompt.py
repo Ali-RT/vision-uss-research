@@ -31,3 +31,10 @@ def test_prompt_views_differ_only_by_uss_sentence():
 def test_padded_crop_clips():
     assert padded_crop((100, 100, 200, 200), 960, 640) == (80, 80, 220, 220)
     assert padded_crop((0, 0, 100, 100), 960, 640)[:2] == (0, 0)
+
+
+def test_padded_crop_off_image_region_is_none():
+    from vision_uss_research.method.uss_prompt import region_box
+    reg = region_box(-400, 300, 960, 640)            # projected far left of the frame
+    assert reg[2] < reg[0]                           # clipping inverts it
+    assert padded_crop(reg, 960, 640) is None

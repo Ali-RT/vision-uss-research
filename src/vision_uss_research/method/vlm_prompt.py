@@ -70,9 +70,15 @@ def parse_name_box(text: str, resized_wh: tuple[int, int],
     return name, b
 
 
-def padded_crop(region, img_w: int, img_h: int, pad: float = 0.2) -> tuple[int, ...]:
-    """Integer crop window: the region grown by `pad` of its size, clipped."""
+def padded_crop(region, img_w: int, img_h: int, pad: float = 0.2,
+                min_px: int = 16) -> tuple[int, ...] | None:
+    """Integer crop window: the region grown by `pad` of its size, clipped.
+    None when the region falls (almost) outside the image - a USS object
+    projected off-frame gives no usable view, which counts as a USS miss."""
     x0, y0, x1, y1 = region
+    if x1 - x0 < min_px or y1 - y0 < min_px:
+        return None
     dw, dh = (x1 - x0) * pad, (y1 - y0) * pad
-    return (int(max(0, x0 - dw)), int(max(0, y0 - dh)),
-            int(min(img_w, x1 + dw)), int(min(img_h, y1 + dh)))
+    c = (int(max(0, x0 - dw)), int(max(0, y0 - dh)),
+         int(min(img_w, x1 + dw)), int(min(img_h, y1 + dh)))
+    return c if c[2] - c[0] >= min_px and c[3] - c[1] >= min_px else None
