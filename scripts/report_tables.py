@@ -25,18 +25,26 @@ HELDOUT = ("woodenboard", "speedbump", "bush", "bollard")
 
 
 def vlm_alone_rows(v: pd.DataFrame) -> list[dict]:
+    """VLM alone per type and all-tall. requested = eligible + vlm_failed
+    (every frame errored: inference failure). Abstention (no usable name) is
+    counted only among eligible sequences and decided High by default."""
     rows = []
     groups = [(t, v[v.target_object == t]) for t in sorted(v.target_object.unique())]
     groups.append(("all_tall", v[v.truth == "high"]))
     for t, g in groups:
-        g = g[g.vlm_status == "ok"]
+        ok = g[g.vlm_status == "ok"]
+        acct = {"requested_seqs": len(g), "eligible_seqs": len(ok),
+                "vlm_failed": int((g.vlm_status == "vlm_failed").sum()),
+                "vlm_frames": int(g.vlm_frames.sum()),
+                "vlm_error_frames": int(g.vlm_error_frames.sum())}
+        assert acct["requested_seqs"] == acct["eligible_seqs"] + acct["vlm_failed"]
         for arm in ("uss", "full"):
-            k = int((g[arm] == g.truth).sum())
-            fl = int(((g[arm] == "low") & (g.truth == "high")).sum())
-            rows.append({"section": "vlm_alone", "type": t, "rule": "", "arm": arm, "n": len(g),
-                         "vlm_correct": k, "vlm_rate": cg.rate(k, len(g)),
-                         "vlm_ci95": cg.wilson(k, len(g)), "vlm_false_low": fl,
-                         "vlm_abstain": int(g[f"{arm}_raw"].isna().sum())})
+            k = int((ok[arm] == ok.truth).sum())
+            fl = int(((ok[arm] == "low") & (ok.truth == "high")).sum())
+            rows.append({"section": "vlm_alone", "type": t, "rule": "", "arm": arm, **acct,
+                         "n": len(ok), "vlm_correct": k, "vlm_rate": cg.rate(k, len(ok)),
+                         "vlm_ci95": cg.wilson(k, len(ok)), "vlm_false_low": fl,
+                         "vlm_abstain": int(ok[f"{arm}_raw"].isna().sum())})
     return rows
 
 

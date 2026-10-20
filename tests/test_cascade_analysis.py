@@ -46,7 +46,9 @@ def _raw(rows):
 
 
 def _status(rows):
-    return pd.DataFrame(rows, columns=["image", "status"])
+    """(image, status) or (image, status, n_detections) rows."""
+    cols = ["image", "status", "n_detections"][:len(rows[0])] if rows else ["image", "status"]
+    return pd.DataFrame(rows, columns=cols)
 
 
 def _bush_frames(*seq_frames):
@@ -73,7 +75,31 @@ def test_status_is_authoritative():
     assert bool(det.partial["s1"]) and det.missing["s1"] == 1
     assert det.cls["s2"] == "none"                     # evaluated, nothing found
     assert det.cls["s3"] == cg.NOT_EVALUATED and det.failed["s3"] == 1
-    assert (det.coverage == "verified").all()
+    assert (det.coverage == "status_only").all()          # no counts -> not verified
+
+
+def test_detection_counts_must_match_raw():
+    sc = _bush_frames(("s", 0), ("s", 1))
+    one = _raw([("s_rear_00000", "pole", 100.0)])
+    good = _status([("s_rear_00000", "ok", 1), ("s_rear_00001", "ok", 0)])
+    det = cg.detector_sequences(sc, one, good)             # legit zero detections
+    assert det.coverage["s"] == "verified" and det.cls["s"] in ("pole", "none")
+    # missing raw rows: status says 1 detection, raw has none
+    with pytest.raises(ValueError, match="n_detections != raw rows"):
+        cg.detector_sequences(sc, _raw([]), good)
+    # extra raw rows: status says 0, raw has 1
+    with pytest.raises(ValueError, match="n_detections != raw rows"):
+        cg.detector_sequences(sc, one, _status([("s_rear_00000", "ok", 0),
+                                                ("s_rear_00001", "ok", 0)]))
+    # invalid counts
+    for bad in (-1, 1.5, None):
+        with pytest.raises(ValueError, match="non-negative integers"):
+            cg.detector_sequences(sc, one, _status([("s_rear_00000", "ok", bad),
+                                                    ("s_rear_00001", "ok", 0)]))
+    # a failed image cannot report detections
+    with pytest.raises(ValueError, match="failed images"):
+        cg.detector_sequences(sc, _raw([]), _status([("s_rear_00000", "failed", 2),
+                                                     ("s_rear_00001", "ok", 0)]))
 
 
 def test_status_contradictions_raise():
@@ -92,7 +118,7 @@ def test_zero_coverage_does_not_crash_and_rates_are_none(tmp_path):
     sc = _bush_frames(("s1", 0))
     sc.to_csv(tmp_path / "scored.csv", index=False)
     _raw([]).to_csv(tmp_path / "raw.csv", index=False)
-    _status([("s1_rear_00000", "failed")]).to_csv(tmp_path / "status.csv", index=False)
+    _status([("s1_rear_00000", "failed", 0)]).to_csv(tmp_path / "status.csv", index=False)
     v = cg.vlm_sequences(sc)
     det = cg.detector_sequences(sc, _raw([]), _status([("s1_rear_00000", "failed")]))
     r = cg.evaluate(v, det, "uss", "plain")
@@ -147,6 +173,29 @@ def test_seen_types_uses_test_split_only():
 RESULTS = Path(__file__).resolve().parents[1] / "paper" / "results"
 
 
+def test_vlm_alone_rows_keep_failure_accounting():
+    import report_tables
+    sc = _scored([
+        # all-error bush sequence
+        ("b1", "rear", 0, "bush", "high", True, "bush", "bush", "OOM", "test"),
+        ("b1", "rear", 1, "bush", "high", True, "bush", "bush", "OOM", "test"),
+        # mixed: one errored frame, one usable
+        ("b2", "rear", 0, "bush", "high", True, "bush", "bush", "OOM", "test"),
+        ("b2", "rear", 1, "bush", "high", True, "bush", "bush", "", "test"),
+        # usable but only a ground word -> semantic abstention, not a failure
+        ("b3", "rear", 0, "bush", "high", True, "grass", "grass", "", "test"),
+    ])
+    rows = report_tables.vlm_alone_rows(cg.vlm_sequences(sc))
+    r = next(x for x in rows if x["type"] == "bush" and x["arm"] == "uss")
+    assert (r["requested_seqs"], r["eligible_seqs"], r["vlm_failed"]) == (3, 2, 1)
+    assert (r["vlm_frames"], r["vlm_error_frames"]) == (5, 3)
+    assert r["n"] == 2 and r["vlm_abstain"] == 1 and r["vlm_correct"] == 2
+    only_failed = report_tables.vlm_alone_rows(cg.vlm_sequences(sc[sc.sequence_id == "b1"]))
+    r = next(x for x in only_failed if x["type"] == "bush" and x["arm"] == "uss")
+    assert r["requested_seqs"] == 1 and r["vlm_failed"] == 1 and r["n"] == 0
+    assert r["vlm_rate"] is None and r["vlm_abstain"] == 0
+
+
 @pytest.mark.skipif(not (RESULTS / "prompt_decision_low_v1").exists(),
                     reason="private results not present")
 def test_report_tables_regenerate_exactly():
@@ -157,7 +206,14 @@ def test_report_tables_regenerate_exactly():
     got = report_tables.build(RESULTS)
     want = pd.read_csv(Path(__file__).parent / "golden" / "report_tables.csv")
     key = ["section", "type", "rule", "arm"]
-    norm = lambda t: (t.astype(str).replace({"nan": "", "None": ""})  # noqa: E731
-                      .sort_values(key).reset_index(drop=True))
-    got = got.reindex(columns=want.columns)
-    pd.testing.assert_frame_equal(norm(got.fillna("")), norm(want.fillna("")), check_dtype=False)
+    def norm(t):
+        t = t.copy()
+        for c in t.columns:
+            num = pd.to_numeric(t[c], errors="coerce")
+            if num.notna().sum() == t[c].notna().sum():     # numeric column: 129 == 129.0
+                t[c] = num.map(lambda x: "" if pd.isna(x) else f"{x:.6g}")
+            else:
+                t[c] = t[c].astype(object).where(t[c].notna(), "").astype(str).replace({"nan": "", "None": ""})
+        return t.sort_values(key).reset_index(drop=True)
+    assert set(got.columns) == set(want.columns)
+    pd.testing.assert_frame_equal(norm(got[want.columns]), norm(want))

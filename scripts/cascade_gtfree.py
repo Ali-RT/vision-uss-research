@@ -26,8 +26,10 @@ Coverage and populations (step 2 revision, 2026-10-21):
     frames vote; a raw detection on an image without an ok status is a
     contradiction and raises. A sequence with no ok frame is not_evaluated; a
     sequence with some but not all frames ok is decided from its ok frames
-    and counted as partial. Without a status file coverage is "unverified"
-    and every requested frame is treated as evaluated (legacy runs).
+    and counted as partial. Coverage is "verified" only when the status file
+    carries n_detections that match the raw rows of every image; a status file
+    without counts gives "status_only". Without a status file coverage is
+    "unverified" and every requested frame is treated as evaluated (legacy).
   - VLM: frames with an error are dropped; a sequence whose frames all
     errored is vlm_failed (no decision - never a default High).
   - Every comparison uses one common population: sequences that are both
@@ -117,7 +119,14 @@ def vlm_sequences(scored: pd.DataFrame) -> pd.DataFrame:
     return v.drop(columns=["u", "n"])
 
 
-def _validate_status(status: pd.DataFrame, raw: pd.DataFrame) -> pd.Series:
+def _validate_status(status: pd.DataFrame, raw: pd.DataFrame) -> tuple[pd.Series, str]:
+    """Check a status artifact against the raw detections; return (status per
+    image, coverage label). Any inconsistency raises.
+
+    With an `n_detections` column (notebook 07 from 2026-10-21) the counts must
+    be non-negative integers equal to the raw rows of each image (0 for failed
+    images): coverage "verified". Without it, only membership can be checked
+    and coverage is "status_only" - raw-output completeness is unverified."""
     if status.image.duplicated().any():
         raise ValueError(f"duplicate status rows: {status.image[status.image.duplicated()].head(3).tolist()}")
     bad = set(status.status) - {"ok", "failed"}
@@ -128,7 +137,20 @@ def _validate_status(status: pd.DataFrame, raw: pd.DataFrame) -> pd.Series:
     if contra:
         raise ValueError(f"{len(contra)} images have raw detections but no ok status, "
                          f"e.g. {sorted(contra)[:3]}")
-    return st
+    if "n_detections" not in status:
+        return st, "status_only"
+    n = pd.to_numeric(status.n_detections, errors="coerce")
+    if n.isna().any() or (n < 0).any() or (n != n.round()).any():
+        raise ValueError("n_detections must be non-negative integers")
+    expected = n.set_axis(status.image).astype(int)
+    got = raw.groupby("image").size().reindex(expected.index).fillna(0).astype(int)
+    if (expected[st == "failed"] != 0).any():
+        raise ValueError("failed images must have n_detections == 0")
+    mism = expected[expected != got]
+    if len(mism):
+        raise ValueError(f"{len(mism)} images: n_detections != raw rows, "
+                         f"e.g. {mism.index[0]} expects {mism.iat[0]}, raw has {got[mism.index[0]]}")
+    return st, "verified"
 
 
 def detector_sequences(scored: pd.DataFrame, raw: pd.DataFrame,
@@ -137,14 +159,14 @@ def detector_sequences(scored: pd.DataFrame, raw: pd.DataFrame,
 
     Columns: cls (class name, "none", or NOT_EVALUATED), requested, ok, failed,
     missing (frames), partial (some but not all requested frames ok), coverage
-    ("verified" with a status file, else "unverified")."""
+    ("verified": status with detection counts matching raw; "status_only":
+    status without counts; "unverified": no status file)."""
     nearest = raw.sort_values("y1").drop_duplicates("image", keep="last").set_index("image").pred
     frames = scored.drop_duplicates(KEYS).copy()
     frames["image"] = image_key(frames)
     if status is not None:
-        st = _validate_status(status, raw)
+        st, coverage = _validate_status(status, raw)
         frames["fstatus"] = frames.image.map(st).fillna("missing")
-        coverage = "verified"
     else:
         frames["fstatus"] = "ok"
         coverage = "unverified"
