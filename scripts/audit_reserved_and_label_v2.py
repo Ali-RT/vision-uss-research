@@ -55,6 +55,7 @@ def label_v2_rows(seq_dir: Path) -> list[dict]:
     return rows
 
 
+AUDIT_DIR_NAME = "audit_v1"   # excluded from the scan
 SCAN_PATTERNS = ["frames/*/<id>/", "labels/runs/*/*.csv", "experiments/*/propagated_boxes.csv",
                  "datasets/*/dataset_manifest.csv", "method/*/*.csv", "reports/*/*.csv"]
 
@@ -73,6 +74,8 @@ def exposure(reserved: list[str], artifacts: Path, skipped: list[str]) -> pd.Dat
             list(artifacts.glob("experiments/*/propagated_boxes.csv")) + \
             list(artifacts.glob("datasets/*/dataset_manifest.csv")) + \
             list(artifacts.glob("method/*/*.csv")) + list(artifacts.glob("reports/*/*.csv")):
+        if csv.parent.name == AUDIT_DIR_NAME:   # our own earlier outputs mention every ID
+            continue
         try:
             text = csv.read_text(errors="ignore")
         except OSError as e:

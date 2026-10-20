@@ -65,6 +65,18 @@ def frames(video: Path, ratios=(0.30, 0.55, 0.85)):
         ok, img = cap.read()
         imgs.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if ok else None)
     cap.release()
+    if any(i is None for i in imgs):
+        # some containers (the USS topview webm/mp4) do not seek: decode in order
+        cap = cv2.VideoCapture(str(video))
+        allf = []
+        while True:
+            ok, img = cap.read()
+            if not ok:
+                break
+            allf.append(img)
+        cap.release()
+        if allf:
+            imgs = [cv2.cvtColor(allf[int(r * (len(allf) - 1))], cv2.COLOR_BGR2RGB) for r in ratios]
     return imgs
 
 
@@ -129,14 +141,19 @@ def main() -> None:
 
     emp = lv[lv.name == "empty"]
     scene = inv.scene.reindex(sets.index).fillna("")
+    # rough road from the Label V2 database category (H0x_*: gravel, Belgian
+    # pavement, pothole), not the inventory scene: Drive's inventory copy has
+    # blank scenes for some sequences, which mis-stratified run 1
+    cats = lv.groupby("sequence_id")["db_category"].agg(lambda c: "|".join(sorted(set(c.dropna()))))
+    rough = cats.reindex(sets.index).fillna("").str.contains(r"(?:^|\|)H0")
     only = sets == "empty"
     pools = {
         "mixed_code0": sets.index[sets.str.contains("empty") & ~only
                                   & sets.index.isin(emp[emp.class_code == 0].sequence_id)],
         "empty_code3": sets.index[sets.index.isin(emp[emp.class_code == 3].sequence_id)],
         "empty_code5": sets.index[sets.index.isin(emp[emp.class_code == 5].sequence_id)],
-        "only_rough": sets.index[only & scene.str.contains("Rough_road")],
-        "only_other": sets.index[only & ~scene.str.contains("Rough_road")],
+        "only_rough": sets.index[only & rough],
+        "only_other": sets.index[only & ~rough],
     }
     picks = []
     for stratum, pool in pools.items():
