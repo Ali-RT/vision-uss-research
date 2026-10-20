@@ -211,7 +211,8 @@ def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
                              progress: bool = True,
                              heartbeat_file: Path | None = None,
                              progress_every: int = 200,
-                             num_workers: int = 48) -> dict:
+                             num_workers: int = 48,
+                             splits: list[str] | None = None) -> dict:
     """Materialize a manifest into a trainable YOLO dataset on LOCAL disk:
     images/<split>/<sequence_id>/<stem>.jpg (sharded per sequence - no folder
     ever exceeds Drive-or-filesystem-hostile sizes) with mirrored labels/
@@ -223,7 +224,10 @@ def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
     image dimensions are read from the fast LOCAL copy, removing the second
     Drive read the serial version paid per sequence. Already-materialized frames
     are skipped, so rerunning after an interruption resumes. Progress heartbeats
-    to `heartbeat_file` (put it on Drive so it survives runtime disconnects)."""
+    to `heartbeat_file` (put it on Drive so it survives runtime disconnects).
+
+    `splits` limits copying to those splits (evaluation needs only "test");
+    the other splits still get empty image/label dirs so dataset.yaml resolves."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _image_size(path: Path) -> tuple[int, int]:
@@ -246,12 +250,15 @@ def materialize_yolo_dataset(manifest_csv: Path, frames_roots: dict[str, Path],
     roots = {str(k): Path(v) for k, v in frames_roots.items()}
 
     group_cols = ["split", "sequence_id", "camera", "frame_idx", "source"]
+    all_splits = sorted(df["split"].unique())
+    if splits is not None:
+        df = df[df["split"].isin(splits)]
     groups = list(df.groupby(group_cols))
     n_total = len(groups)
 
     # pre-create every split/sequence dir once, so worker threads never race on
     # mkdir and never pay a per-frame directory syscall
-    dirs = set()
+    dirs = {local_dir / kind / split for kind in ("images", "labels") for split in all_splits}
     for (split, seq_id, *_rest), _g in groups:
         dirs.add(local_dir / "images" / split / str(seq_id))
         dirs.add(local_dir / "labels" / split / str(seq_id))

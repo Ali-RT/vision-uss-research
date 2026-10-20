@@ -393,3 +393,25 @@ def test_day_grouped_split_no_day_crosses_splits(tmp_path):
     train_classes = set(out[out.split == "train"].target_object)
     assert train_classes == {"curbstone", "pole", "woodenboard"}
     assert set(out.split.unique()) >= {"train", "test"}
+
+
+def test_materialize_test_split_only(label_world, tmp_path):
+    """splits=["test"] copies only test frames but keeps every split dir, so
+    dataset.yaml still resolves for an evaluation run."""
+    from vision_uss_research.datasets.yolo_export import (materialize_yolo_dataset,
+                                                          write_dataset_manifest)
+    split = split_by_sequence(merge_label_sources(label_world["sources"]), seed=0)
+    drive_dir = tmp_path / "drive_run"
+    prov = write_dataset_manifest(split, drive_dir, {"curbstone": 0, "woodenboard": 1},
+                                  label_world["frames_roots"], seed=0)
+    local = tmp_path / "local_ds"
+    materialize_yolo_dataset(drive_dir / "dataset_manifest.csv",
+                             {k: Path(v) for k, v in prov["frames_roots"].items()},
+                             local, class_names=prov["class_names"], progress=False,
+                             splits=["test"])
+    man = pd.read_csv(drive_dir / "dataset_manifest.csv")
+    copied = {p.parent.parent.name for p in local.rglob("*.jpg")}
+    assert copied == {"test"}
+    for s in man["split"].unique():
+        assert (local / "images" / s).is_dir()
+    assert (local / "dataset.yaml").exists()
