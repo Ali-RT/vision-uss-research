@@ -19,7 +19,7 @@ Strata (seed 0, at most one sequence per recording day within a stratum):
 
 usage (Colab, Drive mounted):
   python scripts/review_label_v2_polygons.py --raw-root RAW \
-      --audit OUT/reports/audit_v1 --inventory paper/results/inventory/inventory_metadata.csv \
+      --audit OUT/reports/audit_v1 \
       --reserved configs/splits/reserved_sessions_v1.csv --out OUT/reports/audit_v1/polygon_review
 """
 from __future__ import annotations
@@ -102,7 +102,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw-root", type=Path, required=True)
     ap.add_argument("--audit", type=Path, required=True)
-    ap.add_argument("--inventory", type=Path, required=True)
+    ap.add_argument("--inventory", type=Path, default=None,
+                    help="inventory_metadata.csv; default: newest under <outputs>/inventory/*/ "
+                         "or <outputs>/profiles/*/, where <outputs> is two levels above --audit")
     ap.add_argument("--reserved", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
@@ -114,7 +116,16 @@ def main() -> None:
     reserved = set(pd.read_csv(a.reserved).sequence_id)
     lv = lv[~lv.sequence_id.isin(reserved)]
     sets = lv.groupby("sequence_id")["name"].agg(lambda s: "|".join(sorted(set(s))))
-    inv = pd.read_csv(a.inventory).set_index("sequence_id")
+    inv_path = a.inventory
+    if inv_path is None or not inv_path.exists():
+        outputs = a.audit.resolve().parents[1]
+        found = sorted(list(outputs.glob("inventory/*/inventory_metadata.csv"))
+                       + list(outputs.glob("profiles/*/inventory_metadata.csv")))
+        if not found:
+            sys.exit(f"inventory_metadata.csv not found (given: {a.inventory}; searched {outputs})")
+        inv_path = found[-1]
+    print(f"inventory: {inv_path}")
+    inv = pd.read_csv(inv_path).set_index("sequence_id")
 
     emp = lv[lv.name == "empty"]
     scene = inv.scene.reindex(sets.index).fillna("")
