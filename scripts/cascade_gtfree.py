@@ -20,8 +20,23 @@ Decision (--rule both):
                    ground word);
   bucket / none -> the VLM.
 
+Coverage and populations (step 2 revision, 2026-10-21):
+  - Detector: with notebook 07's inference_status.csv the status is
+    authoritative. Each requested frame is ok / failed / missing; only ok
+    frames vote; a raw detection on an image without an ok status is a
+    contradiction and raises. A sequence with no ok frame is not_evaluated; a
+    sequence with some but not all frames ok is decided from its ok frames
+    and counted as partial. Without a status file coverage is "unverified"
+    and every requested frame is treated as evaluated (legacy runs).
+  - VLM: frames with an error are dropped; a sequence whose frames all
+    errored is vlm_failed (no decision - never a default High).
+  - Every comparison uses one common population: sequences that are both
+    detector-evaluated and VLM-ok. Exclusions are counted, never silent.
+    Rates on an empty population are None.
+
 usage: python scripts/cascade_gtfree.py --scored a/scored.csv b/scored.csv \
-           --raw woodenboard=reports/eval_holdwoodenboard/raw_predictions.csv ...
+           --raw woodenboard=reports/eval_holdwoodenboard/raw_predictions.csv ... \
+           [--status woodenboard=reports/eval_holdwoodenboard/inference_status.csv ...]
 """
 from __future__ import annotations
 
@@ -42,6 +57,10 @@ GROUND = re.compile(r"\b(curb\w*|kerb\w*|grass\w*|ground|road|pavement|asphalt|"
                     r"parking (space|spot|lot)|shadow|line|lines|sidewalk|street)\b")
 
 
+KEYS = ["sequence_id", "camera", "frame_idx"]
+NOT_EVALUATED = "not_evaluated"
+
+
 def vlm_bin(name) -> str | None:
     if not isinstance(name, str) or GROUND.search(name.lower()):
         return None
@@ -49,7 +68,7 @@ def vlm_bin(name) -> str | None:
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> str:
-    """95% Wilson interval for k/n, as 'lo-hi' in percent."""
+    """95% Wilson interval for k/n, as 'lo-hi' in percent ('' when n == 0)."""
     if n == 0:
         return ""
     p = k / n
@@ -58,48 +77,89 @@ def wilson(k: int, n: int, z: float = 1.96) -> str:
     return f"{100 * max(c - h, 0):.1f}-{100 * min(c + h, 1):.1f}"
 
 
+def rate(k: int, n: int) -> float | None:
+    return round(k / n, 3) if n else None
+
+
 def vote(s: pd.Series):
     """Majority over a sequence's frames; a tie or no votes is an abstention (None)."""
     m = s.dropna().mode()
     return m.iat[0] if len(m) == 1 else None
 
 
+def image_key(frames: pd.DataFrame) -> pd.Series:
+    return (frames.sequence_id + "_" + frames.camera + "_"
+            + frames.frame_idx.map(lambda i: f"{int(i):05d}"))
+
+
 def vlm_sequences(scored: pd.DataFrame) -> pd.DataFrame:
-    sc = scored[scored.error.fillna("") == ""].copy()
-    sc["cb"] = [vlm_bin(n) for n in sc.crop_name]
-    sc["fb"] = [vlm_bin(n) for n in sc.full_name]
-    v = sc.groupby("sequence_id").agg(target_object=("target_object", "first"),
-                                      truth=("truth", "first"), uss_track=("uss_track", "first"),
-                                      u=("cb", vote), n=("fb", vote))
-    v["uss_raw"] = v.u.where(v.uss_track.astype(bool), v.n)   # None = abstained
+    """One row per sequence in `scored` (including sequences whose VLM frames
+    all errored: vlm_status 'vlm_failed', no decision)."""
+    sc = scored.copy()
+    sc["err"] = sc.error.fillna("") != ""
+    ok = sc[~sc.err].copy()
+    ok["cb"] = [vlm_bin(n) for n in ok.crop_name]
+    ok["fb"] = [vlm_bin(n) for n in ok.full_name]
+    base = sc.groupby("sequence_id").agg(target_object=("target_object", "first"),
+                                         truth=("truth", "first"),
+                                         uss_track=("uss_track", "first"),
+                                         vlm_frames=("err", "size"),
+                                         vlm_error_frames=("err", "sum"))
+    votes = ok.groupby("sequence_id").agg(u=("cb", vote), n=("fb", vote))
+    v = base.join(votes)
+    v["vlm_status"] = (v.vlm_error_frames < v.vlm_frames).map({True: "ok", False: "vlm_failed"})
+    v["uss_raw"] = v.u.where(v.uss_track.astype(bool), v.n)     # None = abstained
     v["full_raw"] = v.n
-    v["uss"] = v.uss_raw.fillna("high")                        # abstain -> stop
-    v["full"] = v.full_raw.fillna("high")
+    good = v.vlm_status == "ok"
+    v["uss"] = v.uss_raw.where(~good | v.uss_raw.notna(), "high")   # abstain -> stop
+    v["full"] = v.full_raw.where(~good | v.full_raw.notna(), "high")
+    v.loc[~good, ["uss", "full"]] = None
     return v.drop(columns=["u", "n"])
 
 
-NOT_EVALUATED = "not_evaluated"
+def _validate_status(status: pd.DataFrame, raw: pd.DataFrame) -> pd.Series:
+    if status.image.duplicated().any():
+        raise ValueError(f"duplicate status rows: {status.image[status.image.duplicated()].head(3).tolist()}")
+    bad = set(status.status) - {"ok", "failed"}
+    if bad:
+        raise ValueError(f"unknown status values {bad}")
+    st = status.set_index("image").status
+    contra = set(raw.image) - set(st[st == "ok"].index)
+    if contra:
+        raise ValueError(f"{len(contra)} images have raw detections but no ok status, "
+                         f"e.g. {sorted(contra)[:3]}")
+    return st
 
 
 def detector_sequences(scored: pd.DataFrame, raw: pd.DataFrame,
-                       evaluated: set[str] | None = None) -> pd.Series:
-    """Per-sequence detector answer from raw detections.
+                       status: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Per-sequence detector answer from raw detections, with coverage counts.
 
-    `evaluated` is the set of image stems the detector actually ran on
-    (notebook 07's inference_status.csv). With it, a frame missing from raw
-    detections is "none" only if it was evaluated; frames never evaluated are
-    dropped, and a sequence with no evaluated frame is NOT_EVALUATED. Without
-    it (runs before 2026-10-21), every missing frame counts as "none" - the
-    caller must report that evaluation coverage is unverified."""
+    Columns: cls (class name, "none", or NOT_EVALUATED), requested, ok, failed,
+    missing (frames), partial (some but not all requested frames ok), coverage
+    ("verified" with a status file, else "unverified")."""
     nearest = raw.sort_values("y1").drop_duplicates("image", keep="last").set_index("image").pred
-    img = (scored.sequence_id + "_" + scored.camera + "_"
-           + scored.frame_idx.map(lambda i: f"{int(i):05d}"))
-    frames = scored.assign(cls=img.map(nearest).fillna("none"))
-    if evaluated is not None:
-        frames = frames[img.isin(evaluated) | img.isin(set(nearest.index))]
-    out = frames.groupby("sequence_id").cls.agg(
+    frames = scored.drop_duplicates(KEYS).copy()
+    frames["image"] = image_key(frames)
+    if status is not None:
+        st = _validate_status(status, raw)
+        frames["fstatus"] = frames.image.map(st).fillna("missing")
+        coverage = "verified"
+    else:
+        frames["fstatus"] = "ok"
+        coverage = "unverified"
+    frames["cls"] = frames.image.map(nearest).fillna("none")
+    counts = frames.groupby("sequence_id").fstatus.agg(
+        requested="size", ok=lambda x: (x == "ok").sum(),
+        failed=lambda x: (x == "failed").sum(), missing=lambda x: (x == "missing").sum())
+    good = frames[frames.fstatus == "ok"]
+    cls = good.groupby("sequence_id").cls.agg(
         lambda x: "none" if len(x.mode()) > 1 else x.mode().iat[0])
-    return out.reindex(scored.sequence_id.unique()).fillna(NOT_EVALUATED)
+    out = counts.join(cls.rename("cls"))
+    out["cls"] = out.cls.fillna(NOT_EVALUATED)
+    out["partial"] = (out.ok > 0) & (out.ok < out.requested)
+    out["coverage"] = coverage
+    return out
 
 
 def cascade(v: pd.DataFrame, cls: pd.Series, arm: str, rule: str = "both") -> pd.Series:
@@ -111,6 +171,32 @@ def cascade(v: pd.DataFrame, cls: pd.Series, arm: str, rule: str = "both") -> pd
     return dec.mask(named & (det == "low") & (v[f"{arm}_raw"] == "high"), "high")
 
 
+def evaluate(v: pd.DataFrame, det: pd.DataFrame, arm: str, rule: str) -> dict:
+    """Counts on the common population (detector-evaluated and VLM-ok)."""
+    req = det.index.union(v.index)
+    d_ok = det.cls.reindex(req).fillna(NOT_EVALUATED) != NOT_EVALUATED
+    v_ok = v.vlm_status.reindex(req).fillna("vlm_failed") == "ok"
+    pop = req[d_ok & v_ok]
+    d, cls = v.loc[pop], det.cls.loc[pop]
+    dec = cascade(d, cls, arm, rule)
+    detb = cls.map(BINS)
+    high = d.truth == "high"
+    n = len(pop)
+    out = {"requested_seqs": len(req), "not_evaluated": int((~d_ok).sum()),
+           "vlm_failed": int((d_ok & ~v_ok).sum()),
+           "partial_seqs": int(det.partial.reindex(pop).sum()),
+           "frames_requested": int(det.requested.sum()), "frames_ok": int(det.ok.sum()),
+           "frames_failed": int(det.failed.sum()), "frames_missing": int(det.missing.sum()),
+           "coverage": det.coverage.iat[0] if len(det) else "", "n": n,
+           "det_named": int((~cls.isin(BUCKET | {"none"})).sum())}
+    for name, dd in (("detector", detb), ("vlm", d[arm]), ("cascade", dec)):
+        k = int((dd == d.truth).sum())
+        fl = int(((dd == "low") & high).sum())
+        out.update({f"{name}_correct": k, f"{name}_rate": rate(k, n),
+                    f"{name}_ci95": wilson(k, n), f"{name}_false_low": fl})
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scored", nargs="+", required=True)
@@ -120,33 +206,18 @@ def main() -> None:
                     help="type=path/inference_status.csv (notebook 07, from 2026-10-21)")
     a = ap.parse_args()
     scored = pd.concat([pd.read_csv(p) for p in a.scored], ignore_index=True)
-    scored = scored.drop_duplicates(["sequence_id", "camera", "frame_idx"])
+    scored = scored.drop_duplicates(KEYS)
     v = vlm_sequences(scored)
-    status = {}
-    for spec in a.status:
-        t, path = spec.split("=", 1)
-        st = pd.read_csv(path)
-        status[t] = set(st.loc[st.status == "ok", "image"])
+    status = dict(spec.split("=", 1) for spec in a.status)
     rows = []
     for spec in a.raw:
         t, path = spec.split("=", 1)
-        sub = scored[scored.target_object == t]
-        cls = detector_sequences(sub, pd.read_csv(path), status.get(t))
-        n_not_eval = int((cls == NOT_EVALUATED).sum())
-        cls = cls[cls != NOT_EVALUATED]
-        d = v.loc[cls.index]
-        det = cls.map(BINS)
+        st = pd.read_csv(status[t]) if t in status else None
+        det = detector_sequences(scored[scored.target_object == t], pd.read_csv(path), st)
+        vt = v[v.target_object == t]
         for arm in ("uss", "full"):
-            dec = cascade(d, cls, arm, a.rule)
-            ok = int((dec == d.truth).sum())
-            fl = int(((dec == "low") & (d.truth == "high")).sum())
-            rows.append({"type": t, "arm": arm, "seqs": len(d),
-                         "coverage": "verified" if t in status else "unverified",
-                         "not_evaluated": n_not_eval,
-                         "det_named": round((~cls.isin(BUCKET | {"none"})).mean(), 2),
-                         "det_alone": round((det == d.truth).mean(), 3),
-                         "cascade": round(ok / len(d), 3), "cascade_ci95": wilson(ok, len(d)),
-                         "false_low": f"{fl}/{len(d)}", "false_low_ci95": wilson(fl, len(d))})
+            rows.append({"type": t, "arm": arm, "rule": a.rule, **evaluate(vt, det, arm, a.rule)})
+    pd.set_option("display.width", 250)
     print(pd.DataFrame(rows).to_string(index=False))
 
 
