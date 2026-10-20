@@ -31,6 +31,7 @@ CLASS_COL = "class (0=traversable, 1=low, 2=unknown, 3=high)"
 
 def label_v2_rows(seq_dir: Path) -> list[dict]:
     csvs = sorted(p for p in seq_dir.glob("*_PAS_m_label_V2.csv"))
+    n_files = len(csvs)   # only the first is read; >1 is recorded, not merged
     if not csvs:
         return [{"sequence_id": seq_dir.name, "error": "no_label_v2"}]
     try:
@@ -44,7 +45,7 @@ def label_v2_rows(seq_dir: Path) -> list[dict]:
         cat = next((p for p in parts if re.match(r"^[A-Z]\d+_", p)), "")
         typ = next((p for p in parts if re.match(r"^Type\d+$", p, re.I)), "")
         point = (r.get("xmin") == r.get("xmax")) and (r.get("ymin") == r.get("ymax"))
-        rows.append({"sequence_id": seq_dir.name, "error": "",
+        rows.append({"sequence_id": seq_dir.name, "error": "", "n_label_v2_files": n_files,
                      "object": str(r.get("Which object", "")).strip(),
                      "class_code": r.get(CLASS_COL),
                      "important_distance_mm": r.get("important Distance [mm]"),
@@ -54,8 +55,14 @@ def label_v2_rows(seq_dir: Path) -> list[dict]:
     return rows
 
 
-def exposure(reserved: list[str], artifacts: Path) -> pd.DataFrame:
-    """Which artifact files mention each reserved ID (CSV text search, no images)."""
+SCAN_PATTERNS = ["frames/*/<id>/", "labels/runs/*/*.csv", "experiments/*/propagated_boxes.csv",
+                 "datasets/*/dataset_manifest.csv", "method/*/*.csv", "reports/*/*.csv"]
+
+
+def exposure(reserved: list[str], artifacts: Path, skipped: list[str]) -> pd.DataFrame:
+    """Which artifact files mention each reserved ID (text search of SCAN_PATTERNS
+    only, no images). Unreadable files are appended to `skipped`. A miss means
+    "no evidence in the scanned artifacts", not proof of no exposure."""
     hits = {s: [] for s in reserved}
     frames = artifacts / "frames"
     for win in (frames.glob("*") if frames.exists() else []):
@@ -68,7 +75,8 @@ def exposure(reserved: list[str], artifacts: Path) -> pd.DataFrame:
             list(artifacts.glob("method/*/*.csv")) + list(artifacts.glob("reports/*/*.csv")):
         try:
             text = csv.read_text(errors="ignore")
-        except OSError:
+        except OSError as e:
+            skipped.append(f"{csv.relative_to(artifacts)}: {type(e).__name__}")
             continue
         for s in reserved:
             if s in text:
@@ -88,8 +96,13 @@ def main() -> None:
     a.out.mkdir(parents=True, exist_ok=True)
 
     reserved = pd.read_csv(a.reserved).sequence_id.tolist()
-    exp = exposure(reserved, a.artifacts)
+    skipped: list[str] = []
+    exp = exposure(reserved, a.artifacts, skipped)
     exp.to_csv(a.out / "reserved_exposure.csv", index=False)
+    (a.out / "exposure_scan_scope.txt").write_text(
+        "patterns:\n" + "\n".join(SCAN_PATTERNS) + f"\n\nunreadable files ({len(skipped)}):\n"
+        + "\n".join(skipped) + "\n")
+    print(f"scan patterns {SCAN_PATTERNS} | unreadable files {len(skipped)}")
     print(f"reserved {len(reserved)} | mentioned by any artifact: {(exp.n_hits > 0).sum()}")
     print(exp.hits.str.split("|").explode().replace("", pd.NA).dropna()
           .str.replace(r"/[^/]+$", "", regex=True).value_counts().to_string())
