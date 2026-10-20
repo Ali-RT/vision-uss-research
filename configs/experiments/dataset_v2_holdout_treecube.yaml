@@ -1,8 +1,8 @@
-# CONFIRMATION ROTATION (CVPR method): the cascade rules in
-# scripts/cascade_gtfree.py were frozen on 2026-10-20 after the woodenboard,
-# speedbump, bush and bollard rotations. tree and cubestandard are tall types
-# that no earlier analysis or VLM run has touched, so this rotation tests the
-# frozen pipeline - above all its false-Low rate - on fresh data.
+# CONFIRMATION ROTATION (CVPR method): tree and cubestandard are tall types
+# that no earlier analysis or VLM run has touched. The cascade rule in
+# scripts/cascade_gtfree.py must be fixed BEFORE this rotation's results are
+# looked at; then it tests that rule - above all its false-Low rate - on
+# fresh data.
 # notebooks/05: CONFIG_NAME = "dataset_v2_holdout_treecube"
 stage: dataset
 tag: v2holdtreecube
