@@ -116,15 +116,34 @@ def parse_drive_over(text: str) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
-# Nouns a VLM uses for drivable-over (< ~25 cm) things; everything else = high.
-LOW_WORDS = ("curb", "kerb", "speed bump", "bump", "board", "plank", "wood", "beam",
+# Words and phrases a VLM uses for drivable-over (< ~25 cm) things. Matched as
+# whole words (a trailing plural "s"/"es" allowed), never as substrings:
+# "trailer" must not match "rail", "wooden fence" must not match "wood".
+LOW_WORDS = ("curb", "kerb", "speed bump", "bump", "board", "plank",
              "hose", "step", "grass", "marking", "line", "manhole", "drain", "mat",
-             "rail", "wheel stop", "stopper", "pothole")
+             "wheel stop", "stopper", "pothole")
+# Words whose height depends on context (guard rail vs. track rail, ceiling
+# beam vs. beam on the ground, wooden fence vs. wooden board). A name whose
+# only lexicon hit is one of these gets no bin (None): an explicit abstention,
+# not a guess.
+AMBIGUOUS_WORDS = ("rail", "beam", "wood", "wooden", "log")
+
+
+def _has_word(name: str, phrase: str) -> bool:
+    return re.search(rf"\b{re.escape(phrase)}(?:s|es)?\b", name) is not None
 
 
 def name_to_bin(name) -> str | None:
-    """Height bin from the VLM's noun (lexicon): 'low' | 'high' | None."""
+    """Height bin from the VLM's noun (lexicon): 'low' | 'high' | None.
+
+    'low' if any LOW_WORDS phrase occurs as a whole word; None if no low phrase
+    occurs but an AMBIGUOUS_WORDS word does; otherwise 'high' (any other
+    object noun). None also for an unusable name."""
     n = clean_name(name)
     if n is None:
         return None
-    return "low" if any(w in n for w in LOW_WORDS) else "high"
+    if any(_has_word(n, w) for w in LOW_WORDS):
+        return "low"
+    if any(_has_word(n, w) for w in AMBIGUOUS_WORDS):
+        return None
+    return "high"

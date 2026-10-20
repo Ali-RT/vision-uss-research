@@ -51,3 +51,24 @@ def test_drive_over_and_lexicon():
     assert name_to_bin("speed bump") == "low"
     assert name_to_bin("traffic cone") == "high"
     assert name_to_bin(None) is None
+
+
+def test_name_to_bin_whole_words_and_ambiguity():
+    from vision_uss_research.method.vlm_prompt import name_to_bin
+    # substring false positives found in review
+    assert name_to_bin("trailer") == "high"
+    assert name_to_bin("railing") == "high"
+    assert name_to_bin("wooden fence") is None          # ambiguous, not low
+    # plurals and phrases still match
+    assert name_to_bin("curbs") == "low"
+    assert name_to_bin("yellow boards") == "low"
+    assert name_to_bin("wooden plank") == "low"           # plank decides
+    assert name_to_bin("speed bumps") == "low"
+    assert name_to_bin("manhole cover") == "low"
+    # context-dependent words abstain
+    assert name_to_bin("rail") is None
+    assert name_to_bin("ceiling beam") is None
+    assert name_to_bin("log") is None
+    # words that merely contain a low word stay high
+    assert name_to_bin("matress") == "high"
+    assert name_to_bin("airline") == "high"

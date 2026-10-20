@@ -59,8 +59,9 @@ def wilson(k: int, n: int, z: float = 1.96) -> str:
 
 
 def vote(s: pd.Series):
-    s = s.dropna()
-    return s.mode().iat[0] if len(s) else None
+    """Majority over a sequence's frames; a tie or no votes is an abstention (None)."""
+    m = s.dropna().mode()
+    return m.iat[0] if len(m) == 1 else None
 
 
 def vlm_sequences(scored: pd.DataFrame) -> pd.DataFrame:
@@ -77,13 +78,28 @@ def vlm_sequences(scored: pd.DataFrame) -> pd.DataFrame:
     return v.drop(columns=["u", "n"])
 
 
-def detector_sequences(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.Series:
+NOT_EVALUATED = "not_evaluated"
+
+
+def detector_sequences(scored: pd.DataFrame, raw: pd.DataFrame,
+                       evaluated: set[str] | None = None) -> pd.Series:
+    """Per-sequence detector answer from raw detections.
+
+    `evaluated` is the set of image stems the detector actually ran on
+    (notebook 07's inference_status.csv). With it, a frame missing from raw
+    detections is "none" only if it was evaluated; frames never evaluated are
+    dropped, and a sequence with no evaluated frame is NOT_EVALUATED. Without
+    it (runs before 2026-10-21), every missing frame counts as "none" - the
+    caller must report that evaluation coverage is unverified."""
     nearest = raw.sort_values("y1").drop_duplicates("image", keep="last").set_index("image").pred
     img = (scored.sequence_id + "_" + scored.camera + "_"
            + scored.frame_idx.map(lambda i: f"{int(i):05d}"))
     frames = scored.assign(cls=img.map(nearest).fillna("none"))
-    return frames.groupby("sequence_id").cls.agg(
+    if evaluated is not None:
+        frames = frames[img.isin(evaluated) | img.isin(set(nearest.index))]
+    out = frames.groupby("sequence_id").cls.agg(
         lambda x: "none" if len(x.mode()) > 1 else x.mode().iat[0])
+    return out.reindex(scored.sequence_id.unique()).fillna(NOT_EVALUATED)
 
 
 def cascade(v: pd.DataFrame, cls: pd.Series, arm: str, rule: str = "both") -> pd.Series:
@@ -100,15 +116,24 @@ def main() -> None:
     ap.add_argument("--scored", nargs="+", required=True)
     ap.add_argument("--raw", nargs="+", required=True, help="type=path/raw_predictions.csv")
     ap.add_argument("--rule", choices=["plain", "both"], default="both")
+    ap.add_argument("--status", nargs="*", default=[],
+                    help="type=path/inference_status.csv (notebook 07, from 2026-10-21)")
     a = ap.parse_args()
     scored = pd.concat([pd.read_csv(p) for p in a.scored], ignore_index=True)
     scored = scored.drop_duplicates(["sequence_id", "camera", "frame_idx"])
     v = vlm_sequences(scored)
+    status = {}
+    for spec in a.status:
+        t, path = spec.split("=", 1)
+        st = pd.read_csv(path)
+        status[t] = set(st.loc[st.status == "ok", "image"])
     rows = []
     for spec in a.raw:
         t, path = spec.split("=", 1)
         sub = scored[scored.target_object == t]
-        cls = detector_sequences(sub, pd.read_csv(path))
+        cls = detector_sequences(sub, pd.read_csv(path), status.get(t))
+        n_not_eval = int((cls == NOT_EVALUATED).sum())
+        cls = cls[cls != NOT_EVALUATED]
         d = v.loc[cls.index]
         det = cls.map(BINS)
         for arm in ("uss", "full"):
@@ -116,6 +141,8 @@ def main() -> None:
             ok = int((dec == d.truth).sum())
             fl = int(((dec == "low") & (d.truth == "high")).sum())
             rows.append({"type": t, "arm": arm, "seqs": len(d),
+                         "coverage": "verified" if t in status else "unverified",
+                         "not_evaluated": n_not_eval,
                          "det_named": round((~cls.isin(BUCKET | {"none"})).mean(), 2),
                          "det_alone": round((det == d.truth).mean(), 3),
                          "cascade": round(ok / len(d), 3), "cascade_ci95": wilson(ok, len(d)),

@@ -23,6 +23,29 @@ import cascade_gtfree as cg  # noqa: E402
 KEYS = ["sequence_id", "camera", "frame_idx"]
 
 
+def seen_type_decisions(scored: pd.DataFrame, frame_predictions: pd.DataFrame,
+                        rule: str, arm: str) -> pd.DataFrame:
+    """Per-sequence decisions on the TEST split only (the baseline detector
+    trained on the other splits). One row per sequence."""
+    sc = scored.copy()
+    sc["uss_track"] = sc["uss_track"].fillna(True) if "uss_track" in sc else True
+    sc = sc.drop_duplicates(KEYS)
+    sc = sc[sc.split == "test"]
+    v = cg.vlm_sequences(sc)
+    fp = frame_predictions.sort_values("conf").drop_duplicates(KEYS, keep="last")
+    m = sc.merge(fp[KEYS + ["pred_class"]], on=KEYS, how="left")
+    cls = (m.assign(c=m.pred_class.fillna("none")).groupby("sequence_id").c
+           .agg(lambda x: "none" if len(x.mode()) > 1 else x.mode().iat[0]))
+    d = v.loc[cls.index]
+    det = cls.map(cg.BINS)
+    dec = cg.cascade(d, cls, arm, rule)
+    return pd.DataFrame({"type": d.target_object, "truth": d.truth, "detector_class": cls,
+                         "detector": det == d.truth, "vlm": d[arm] == d.truth,
+                         "cascade": dec == d.truth,
+                         "deferred": cls.isin(cg.BUCKET | {"none"}),
+                         "cascade_false_low": (dec == "low") & (d.truth == "high")})
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scored", nargs="+", required=True)
@@ -30,23 +53,9 @@ def main() -> None:
     ap.add_argument("--rule", choices=["plain", "both"], default="both")
     a = ap.parse_args()
     sc = pd.concat([pd.read_csv(p) for p in a.scored], ignore_index=True)
-    sc["uss_track"] = sc["uss_track"].fillna(True) if "uss_track" in sc else True
-    sc = sc.drop_duplicates(KEYS)
-    sc = sc[sc.split == "test"]
-    v = cg.vlm_sequences(sc)
-    fp = (pd.read_csv(a.frame_predictions).sort_values("conf")
-          .drop_duplicates(KEYS, keep="last"))
-    m = sc.merge(fp[KEYS + ["pred_class"]], on=KEYS, how="left")
-    cls = (m.assign(c=m.pred_class.fillna("none")).groupby("sequence_id").c
-           .agg(lambda x: "none" if len(x.mode()) > 1 else x.mode().iat[0]))
-    d = v.loc[cls.index]
-    det = cls.map(cg.BINS)
+    fp = pd.read_csv(a.frame_predictions)
     for arm in ("uss", "full"):
-        dec = cg.cascade(d, cls, arm, a.rule)
-        r = pd.DataFrame({"type": d.target_object, "detector": det == d.truth,
-                          "vlm": d[arm] == d.truth, "cascade": dec == d.truth,
-                          "deferred": cls.isin(cg.BUCKET | {"none"}),
-                          "cascade_false_low": (dec == "low") & (d.truth == "high")})
+        r = seen_type_decisions(sc, fp, a.rule, arm)
         out = r.groupby("type").mean(numeric_only=True).round(3)
         out.insert(0, "seqs", r.groupby("type").size())
         print(f"\n== rule {a.rule}, VLM arm {arm}")
