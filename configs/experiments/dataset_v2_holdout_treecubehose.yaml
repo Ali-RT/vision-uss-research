@@ -1,0 +1,54 @@
+# STEP 4 TIER C ROTATION (STEP4_PROPOSAL.md revision 2, approved 2026-10-21).
+# tree, cubestandard and hose were never used to develop the VLM, cascade or
+# gate routing rule (they were fine-tuned on as bucket members before,
+# used in camera-calibration fits and partly inspected in label QA). The
+# three are bucket members (low_other is left empty, see the end).
+# notebooks/05: CONFIG_NAME = "dataset_v2_holdout_treecubehose"
+stage: dataset
+tag: v2holdtreecubehose
+
+sources:
+  - name: sam3_text
+    gold: false
+  - name: clicks
+    gold: true
+
+# objects mapped into buckets (everything not listed keeps its own class)
+class_groups:
+  hose: low_other
+  step: low_other
+  cone: high_other
+  bollard: high_other
+  car: high_other
+  tree: high_other
+  bush: high_other
+  stonelarge: high_other
+  stonemiddle: high_other
+  cubestandard: high_other
+  ubarrier: high_other
+  fence: high_other
+
+class_ids:
+  curbstone: 0
+  speedbump: 1
+  woodenboard: 2
+  pole: 3
+  dummychild: 4
+  bicyclestand: 5
+  low_other: 6
+  high_other: 7
+
+# open-set experiment: these objects are excluded from train/val entirely
+# (all their sequences forced to test), measuring generalization of the
+# bucket classes to NEVER-SEEN object types. [] disables.
+holdout_objects: [tree, cubestandard, hose]
+
+split:
+  gold_test_frac: 0.20
+  auto_test_frac: 0.10
+  val_frac: 0.15
+seed: 0
+# hose and step are the only low_other members and step has no sequences, so
+# holding out hose leaves the low_other class with no training data - waive
+# the check (the gate treats low_other like any bucket).
+allow_empty_classes: [low_other]
