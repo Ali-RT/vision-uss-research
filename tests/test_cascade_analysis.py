@@ -217,3 +217,54 @@ def test_report_tables_regenerate_exactly():
         return t.sort_values(key).reset_index(drop=True)
     assert set(got.columns) == set(want.columns)
     pd.testing.assert_frame_equal(norm(got[want.columns]), norm(want))
+
+
+def test_step3_accounting_and_semantic_abstention():
+    import step3_baselines as s3
+    sc = _scored([
+        ("a", "rear", 0, "woodenboard", "low", True, "board", "board", "", "test"),
+        ("b", "rear", 0, "woodenboard", "low", True, "grass", "grass", "", "test"),  # abstains
+        ("c", "rear", 0, "woodenboard", "low", True, "board", "board", "OOM", "test"),  # vlm failed
+        ("d", "rear", 0, "woodenboard", "low", True, "board", "board", "", "test"),
+    ])
+    v = cg.vlm_sequences(sc)
+    raw = _raw([("d_rear_00000", "pole", 300.0)])
+    st = _status([("a_rear_00000", "ok", 0), ("b_rear_00000", "ok", 0),
+                  ("c_rear_00000", "ok", 0), ("d_rear_00000", "ok", 1)])
+    det = cg.detector_sequences(sc, raw, st)
+    x, acct = s3.decisions(v, det, None)
+    assert acct["requested_seqs"] == 4 and acct["eligible_seqs"] == 3
+    assert acct["excl_vlm_failed"] == 1 and acct["excl_not_evaluated"] == 0
+    assert acct["requested_seqs"] == (acct["eligible_seqs"] + acct["excl_not_evaluated"]
+                                      + acct["excl_vlm_failed"] + acct["excl_fixed_failed"])
+    m = s3.arm_metrics(x, "vlm_uss")
+    assert m["semantic_abstain"] == 1 and m["final_no_decision"] == 0   # b defaulted to High
+    c = s3.arm_metrics(x, "cascade_uss")
+    assert c["semantic_abstain"] == 1                                    # b deferred and abstained
+    assert x.loc["d", "cascade_uss"] == "high"                           # named pole bypasses
+    assert s3.rates(x, "vlm_uss")["false_low_rate"] != s3.rates(x, "vlm_uss")["false_low_rate"]  # undefined (NaN): no High truth
+
+
+def test_step3_rejects_misaligned_fixed_frames(tmp_path):
+    import step3_baselines as s3
+    base = _scored([("a", "rear", 0, "pole", "high", True, "pole", "pole", "", "test")])
+    for r in ("prompt_decision_v1", "prompt_decision_low_v1", "prompt_decision_high_v1"):
+        (tmp_path / r).mkdir()
+        base.to_csv(tmp_path / r / "scored.csv", index=False)
+    fx = _scored([("a", "rear", 1, "pole", "high", True, "pole", "", "", "test")])
+    fx.to_csv(tmp_path / "fixed.csv", index=False)
+    with pytest.raises(AssertionError, match="frame keys differ"):
+        s3.load_vlm(tmp_path, tmp_path / "fixed.csv")
+
+
+def test_step3_day_counts_match_direct_rates():
+    import numpy as np
+    import step3_baselines as s3
+    x = pd.DataFrame({"day": ["d1", "d1", "d2", "d2", "d2"],
+                      "truth": ["low", "high", "low", "high", "high"],
+                      "arm": ["low", "low", "high", "high", None]})
+    days = np.array(["d1", "d2"])
+    r = s3.rates_from_counts(s3.day_counts(x, "arm", days).sum(axis=0))
+    direct = s3.rates(x, "arm")
+    for k in direct:
+        assert np.isclose(r[k], direct[k], equal_nan=True)
