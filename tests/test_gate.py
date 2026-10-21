@@ -124,3 +124,97 @@ def test_supcon_loss_reference():
         lse = np.log(np.exp(sim[i, others]).sum())
         vals.append(-np.mean([sim[i, j] - lse for j in pos]))
     assert np.isclose(got, np.mean(vals), atol=1e-5)
+
+
+def _write_rotation(tmp, name, rows):
+    d = tmp / name
+    d.mkdir()
+    import json
+    pd.DataFrame(rows, columns=["split", "sequence_id", "target_object", "camera", "frame_idx",
+                                "source", "frame_path", "x0", "y0", "x1", "y1", "class_id"]
+                 ).to_csv(d / "dataset_manifest.csv", index=False)
+    (d / "provenance.json").write_text(json.dumps({"class_names": list(CIDS)}))
+    return d / "dataset_manifest.csv"
+
+
+def test_gt_rows_union_membership_and_heldout_guard(tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import gate_features as gf
+    a = _write_rotation(tmp_path, "a", [
+        ("train", "s1", "curbstone", "rear", 0, "x", "", 1, 2, 30, 40, 0),
+        ("val", "s2", "pole", "rear", 0, "x", "", 1, 2, 30, 40, 3),
+        ("test", "s3", "woodenboard", "rear", 0, "x", "", 1, 2, 30, 40, 2)])
+    b = _write_rotation(tmp_path, "b", [
+        ("val", "s1", "curbstone", "rear", 0, "x", "", 1, 2, 30, 40, 0),
+        ("train", "s3", "woodenboard", "rear", 0, "x", "", 1, 2, 30, 40, 2)])
+    out = gf.gt_rows({"a": a, "b": b}, {"a": {"woodenboard"}, "b": {"pole"}}, set())
+    r = out.set_index("sequence_id")
+    assert r.loc["s1", "split_a"] == "train" and r.loc["s1", "split_b"] == "val"
+    assert r.loc["s3", "split_a"] == "" and r.loc["s3", "split_b"] == "train"   # test never exported
+    with pytest.raises(AssertionError, match="held-out"):
+        gf.gt_rows({"a": a}, {"a": {"pole"}}, set())                           # pole in a's val
+    with pytest.raises(AssertionError, match="reserved"):
+        gf.gt_rows({"a": a}, {"a": {"woodenboard"}}, {"s1"})
+
+
+def test_det_rows_selects_and_keeps_empty_frames():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import gate_features as gf
+    raw = pd.DataFrame({"image": ["s1_rear_00000", "s1_rear_00000"], "pred": ["pole", "curbstone"],
+                        "conf": [0.9, 0.4], "x0": [0, 0], "y0": [0, 0], "x1": [10, 10], "y1": [50, 80]})
+    d = gf.det_rows(raw, pd.Series(["s1_rear_00000", "s2_front_00003"]), CIDS)
+    assert d.loc[0, "class_name"] == "curbstone" and not d.loc[0, "no_detection"]
+    assert bool(d.loc[1, "no_detection"]) and d.loc[1, "sequence_id"] == "s2"
+
+
+def test_gate_train_end_to_end_synthetic(tmp_path, monkeypatch):
+    import json
+    import sys
+    from pathlib import Path
+    pytest.importorskip("torch")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import gate_train as gt
+    monkeypatch.setattr(g, "STEPS_PER_EPOCH", 3)
+    monkeypatch.setattr(g, "EPOCHS", 2)
+    rng = np.random.default_rng(0)
+    rows, feats = [], []
+    for c, centre in (("curbstone", 0), ("pole", 1)):
+        for s in range(6):
+            for k in range(5):
+                v = np.zeros(g.FEAT_DIM, np.float32); v[centre] = 1; v += rng.normal(0, .05, g.FEAT_DIM)
+                rows.append({"sequence_id": f"{c}{s}", "camera": "rear", "frame_idx": k, "x0": 0, "y0": 0,
+                             "x1": 40, "y1": 40, "class_name": c, "target_object": c,
+                             "split_r": "train" if s < 5 else "val", "crop_status": "valid"})
+                feats.append(v)
+    gd = tmp_path / "gt"; gd.mkdir()
+    pd.DataFrame(rows).assign(feature_row=range(len(rows))).to_csv(gd / "crops.csv", index=False)
+    np.save(gd / "features.npy", np.stack(feats))
+    val = [r for r in rows if r["split_r"] == "val"]
+    dd = tmp_path / "det"; dd.mkdir()
+    det = pd.DataFrame([{**{k: r[k] for k in ("sequence_id", "camera", "frame_idx", "x0", "y0", "x1", "y1",
+                                                "class_name")}, "conf": 0.5 + 0.01 * i,
+                         "crop_status": "valid", "no_detection": False} for i, r in enumerate(val)])
+    det.assign(feature_row=range(len(det))).to_csv(dd / "crops.csv", index=False)
+    np.save(dd / "features.npy", np.stack([feats[i] for i, r in enumerate(rows) if r["split_r"] == "val"]))
+    md = tmp_path / "rot"; md.mkdir()
+    pd.DataFrame([{"split": "val", "sequence_id": r["sequence_id"], "target_object": r["class_name"],
+                   "camera": "rear", "frame_idx": r["frame_idx"], "x0": 0, "y0": 0, "x1": 40, "y1": 40,
+                   "class_id": CIDS[r["class_name"]]} for r in val]).to_csv(md / "dataset_manifest.csv", index=False)
+    (md / "provenance.json").write_text(json.dumps({"class_names": ["curbstone", "speedbump", "woodenboard",
+                                                                    "pole", "dummychild", "bicyclestand",
+                                                                    "low_other", "high_other"]}))
+    out = tmp_path / "gate"
+    monkeypatch.setattr(sys, "argv", ["x", "--rotation", "r", "--gt", str(gd), "--det", str(dd),
+                                      "--manifest", str(md / "dataset_manifest.csv"),
+                                      "--heldout", "woodenboard", "--out", str(out)])
+    gt.main()
+    cal = json.loads((out / "calibration.json").read_text())
+    assert cal["active_classes"] == ["curbstone", "pole"] and cal["calibration_detections"] == 10
+    for k in ("trained", "training_free", "confidence"):
+        assert cal[k]["available"] and cal[k]["q"] == 10
+        assert cal[k]["measured_retention"] >= 0.95 or not cal[k]["feasible"]
+    assert cal["trained"]["unreliable_calibration"]          # 10 < 200 detections
