@@ -1,0 +1,126 @@
+"""Rules of the Step 4 open-set gate (STEP4_PROPOSAL.md revision 2)."""
+import numpy as np
+import pandas as pd
+import pytest
+
+from vision_uss_research.method import gate as g
+
+CIDS = {"curbstone": 0, "speedbump": 1, "woodenboard": 2, "pole": 3, "low_other": 6, "high_other": 7}
+BUCKETS = {"low_other", "high_other"}
+
+
+def test_select_detection_ties():
+    d = pd.DataFrame({"pred": ["pole", "curbstone", "speedbump"], "conf": [0.5, 0.5, 0.9],
+                      "y1": [300.0, 300.0, 100.0]})
+    assert g.select_detection(d, CIDS).pred == "curbstone"     # y1 tie, conf tie -> lower id
+    d.loc[0, "conf"] = 0.6
+    assert g.select_detection(d, CIDS).pred == "pole"          # y1 tie -> higher conf
+    assert g.select_detection(d.iloc[:0], CIDS) is None
+
+
+def test_pad_clip_and_invalid():
+    assert g.pad_clip_box(100, 100, 200, 150, 960, 640) == (90, 95, 210, 155)
+    assert g.pad_clip_box(0, 0, 50, 50, 40, 40) == (0, 0, 40, 40)       # clipped
+    assert g.pad_clip_box(10, 10, 15, 30, 960, 640) is None              # width 6 < 8
+
+
+def test_crop_tensor_shape_and_normalization():
+    from PIL import Image
+    img = Image.new("RGB", (100, 80), (255, 255, 255))
+    a = g.crop_tensor(img, (10, 10, 60, 50))
+    assert a.shape == (3, 224, 224) and a.dtype == np.float32
+    assert np.allclose(a[0], (1 - 0.485) / 0.229, atol=1e-5)
+
+
+def test_calibrate_tau_exact_order_statistic():
+    # evaluator example: N=200, 10 disagreements, 190 agreements at 0.5 -> tau 0.5
+    agree = np.r_[np.zeros(10, bool), np.ones(190, bool)]
+    score = np.r_[np.full(10, 0.9), np.full(190, 0.5)]
+    c = g.calibrate_tau(agree, score)
+    assert (c.q, c.tau, c.feasible) == (190, 0.5, True) and c.retention == 0.95
+    # largest feasible threshold
+    c = g.calibrate_tau(np.ones(20, bool), np.arange(20) / 20)
+    assert c.q == 19 and c.tau == 0.05 and c.retention == 0.95
+    # infeasible: 11 disagreements of 200
+    c = g.calibrate_tau(np.r_[np.zeros(11, bool), np.ones(189, bool)], np.ones(200))
+    assert c.tau == -1.0 and not c.feasible and c.retention == 189 / 200
+    # empty
+    c = g.calibrate_tau(np.array([], bool), np.array([]))
+    assert c.tau is None and c.n == 0
+
+
+def test_calibrate_conf():
+    c = g.calibrate_conf(np.linspace(0.3, 0.9, 20))
+    assert c.q == 19 and np.isclose(c.tau, np.linspace(0.3, 0.9, 20)[1])
+    assert g.calibrate_conf(np.array([])).tau is None
+
+
+def test_gate_frame_rules():
+    protos = {"curbstone": np.array([1.0, 0.0]), "pole": np.array([0.0, 1.0])}
+    z = np.array([0.8, 0.6])
+    assert g.gate_frame(None, z, protos, 0.5, BUCKETS, CIDS) == g.NONE
+    assert g.gate_frame("high_other", z, protos, 0.5, BUCKETS, CIDS) == g.BUCKET
+    assert g.gate_frame("speedbump", z, protos, 0.5, BUCKETS, CIDS) == g.UNKNOWN   # no prototype
+    assert g.gate_frame("curbstone", None, protos, 0.5, BUCKETS, CIDS) == g.UNKNOWN  # invalid crop
+    assert g.gate_frame("curbstone", z, protos, 0.8, BUCKETS, CIDS) == g.PASS       # inclusive
+    assert g.gate_frame("curbstone", z, protos, 0.81, BUCKETS, CIDS) == g.UNKNOWN
+    assert g.gate_frame("pole", z, protos, 0.0, BUCKETS, CIDS) == g.UNKNOWN         # not nearest
+    tie = np.array([1.0, 1.0]) / np.sqrt(2)
+    assert g.gate_frame("curbstone", tie, protos, 0.0, BUCKETS, CIDS) == g.PASS     # tie -> lower id
+    assert g.gate_frame("pole", tie, protos, 0.0, BUCKETS, CIDS) == g.UNKNOWN
+    assert g.gate_frame("curbstone", z, protos, None, BUCKETS, CIDS) == g.UNKNOWN   # unavailable
+
+
+def test_confidence_frame_shares_eligibility():
+    assert g.confidence_frame("speedbump", 0.99, False, 0.3, BUCKETS) == g.UNKNOWN
+    assert g.confidence_frame("pole", 0.3, True, 0.3, BUCKETS) == g.PASS
+    assert g.confidence_frame("pole", 0.29, True, 0.3, BUCKETS) == g.UNKNOWN
+    assert g.confidence_frame("low_other", 0.9, False, 0.3, BUCKETS) == g.BUCKET
+
+
+def test_strict_majority():
+    assert g.strict_majority(["pole", "pole", "none"]) == "pole"
+    assert g.strict_majority(["pole", "pole", "none", "unknown"]) == g.UNKNOWN   # 50% is not >50%
+    assert g.strict_majority(["pole", "none", "unknown"]) == g.UNKNOWN          # unique mode, no majority
+    assert g.strict_majority([]) == g.UNKNOWN
+
+
+def test_active_classes_and_heldout_assertion():
+    crops = pd.DataFrame({"class_name": ["curbstone"] * 25 + ["pole"] * 25 + ["high_other"] * 10,
+                          "sequence_id": [f"c{i % 6}" for i in range(25)] + [f"p{i % 3}" for i in range(25)]
+                          + [f"h{i}" for i in range(10)],
+                          "target_object": ["curbstone"] * 25 + ["pole"] * 25 + ["cone"] * 10})
+    assert g.active_classes(crops, CIDS, {"woodenboard"}) == ["curbstone"]   # pole: 3 seqs; bucket: 10 crops
+    with pytest.raises(AssertionError, match="held-out"):
+        g.active_classes(crops, CIDS, {"cone"})
+
+
+def test_sampler_balanced_with_replacement():
+    index = {"a": {"s1": np.array([0, 1]), "s2": np.array([2])}, "b": {"s3": np.array([3])}}
+    rows, labels = g.sample_batch(index, ["a", "b"], np.random.default_rng(0))
+    assert len(rows) == 32 and (labels == 0).sum() == 16 and (labels == 1).sum() == 16
+    assert set(rows[labels == 1]) == {3}
+
+
+def test_prototypes_sequence_weighted():
+    z = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    protos = g.prototypes(z, pd.Series(["a"] * 4), pd.Series(["s1", "s1", "s1", "s2"]), ["a"])
+    assert np.allclose(protos["a"], np.array([1, 1]) / np.sqrt(2))   # s1 counts once
+
+
+def test_supcon_loss_reference():
+    torch = pytest.importorskip("torch")
+    z = torch.nn.functional.normalize(torch.tensor([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]), dim=1)
+    labels = torch.tensor([0, 0, 1, 2])          # label 2 has no positive -> dropped
+    got = float(g.supcon_loss(z, labels, 0.1))
+    zn = z.numpy()
+    sim = zn @ zn.T / 0.1
+    vals = []
+    for i in range(3):
+        pos = [j for j in range(4) if j != i and labels[j] == labels[i]]
+        if not pos:
+            continue
+        others = [j for j in range(4) if j != i]
+        lse = np.log(np.exp(sim[i, others]).sum())
+        vals.append(-np.mean([sim[i, j] - lse for j in pos]))
+    assert np.isclose(got, np.mean(vals), atol=1e-5)
