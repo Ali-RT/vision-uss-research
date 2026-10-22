@@ -1,5 +1,5 @@
 {
- "code_sha": "031448a0dc23131f9eb50229490e07d6613c041a",
+ "code_sha": "0a3b6b8c1b91074d964a04d2935cf92937d2ca31",
  "code_paths": [
   "src",
   "scripts",
@@ -258,6 +258,64 @@
   "method/prompt_uss_proj_v1/sequence_status.csv": {
    "sha256": "d36bafb9a27a2681b49db9fe8e3cdc9f621ed2ebbea005f02fb4ba74b1445e01",
    "bytes": 203707
+  },
+  "datasets/20260718_dataset_v2/dataset_manifest.csv": {
+   "sha256": "0f04052f94f78ee9fa71d95966ad8c2eebbef33f064e5aef8cce1c1192f061e0",
+   "bytes": 20741425
+  },
+  "datasets/20260718_dataset_v2/provenance.json": {
+   "sha256": "940c235f71db632ae0c071b97cae29311231f7f5773590ed0fb12691b7e6dd94",
+   "bytes": 3119
+  },
+  "datasets/dataset_v2daysplit/dataset_manifest.csv": {
+   "sha256": "6ec69c8bf4f06b06b3686356045d7c939ea41f72fb4c076694a22d95db0eef00",
+   "bytes": 21662388
+  },
+  "reports/eval_holdwoodenboard/raw_predictions.csv": {
+   "sha256": "8cb49a2d863e7785138c236aa0a078d66ec187d134f60fc8d50e77f24c7a27d3",
+   "bytes": 1464223
+  },
+  "reports/eval_holdspeedbump/raw_predictions.csv": {
+   "sha256": "54b10c130bce9727231d073fec4c2dfe21d285425163bad1a9c633e5afcf4b21",
+   "bytes": 1483843
+  },
+  "reports/eval_holdbush/raw_predictions.csv": {
+   "sha256": "04569d80edc1a76cf3ee6badf02c44a5beb034359b90bc1a4cf40609a2c6fcda",
+   "bytes": 1736556
+  },
+  "reports/eval_holdbollard/raw_predictions.csv": {
+   "sha256": "8ef1d36958e52b199b9ceb1b4d92ad2819a3feecf9754f74959d8172bc00e3be",
+   "bytes": 1494433
+  },
+  "method/prompt_decision_v1/scored.csv": {
+   "sha256": "31aa4f54d8f483f565740c46b7ac103638d7ddf6bf0e7444557621a400d89d19",
+   "bytes": 777786
+  },
+  "method/prompt_decision_low_v1/scored.csv": {
+   "sha256": "4ca8dd991086861a4f65040f8ed4c904a1e925205a7dbcbde28c2f4654c4f6e3",
+   "bytes": 983969
+  },
+  "method/prompt_decision_high_v1/scored.csv": {
+   "sha256": "abd9dd59284339b42534aaca1cc302ab660c462fb654fb256ecc2551b48ca0f0",
+   "bytes": 2020060
+  },
+  "method/prompt_decision_fixedcrop_v1/scored.csv": {
+   "sha256": "70d57d80fb7cf66076069102435a5c2a53bc978559481216ac3a8e8027d1f6ae",
+   "bytes": 2951688
   }
- }
+ },
+ "declared_absent": [
+  "reports/eval_holdwoodenboard/inference_status.csv",
+  "reports/eval_holdspeedbump/inference_status.csv",
+  "reports/eval_holdbush/inference_status.csv",
+  "reports/eval_holdbollard/inference_status.csv"
+ ],
+ "m3_outputs": [
+  "reports/eval_holdtreecubehose",
+  "method/prompt_decision_tierc_v1",
+  "method/prompt_decision_tierc_fixed_v1",
+  "gate/gate_v1/gate_*",
+  "gate/gate_v1/det_*_test",
+  "gate/gate_v1/evaluation"
+ ]
 }
