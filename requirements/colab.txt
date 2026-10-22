@@ -1,10 +1,15 @@
 # Colab environment for the labeling/training pipeline.
 # Colab already ships torch/torchvision/opencv/pandas - only pin what we add.
-# TODO: after the first verified full run, freeze exact versions here
-#   (pip freeze | grep -iE 'transformers|accelerate|ultralytics').
-transformers>=4.57
-accelerate>=1.0
-ultralytics>=8.3
+# Step 4 freeze (2026-10-22): exact pins. ultralytics 8.4.183 appears in the
+# tier C detector's training/validation logs (earlier detectors' versions
+# were not recorded); transformers 5.20.1 extracted the DINOv2 features;
+# qwen-vl-utils 0.0.14 is pinned for the M3 VLM runs (version of earlier VLM
+# runs not recorded). Changing a pin invalidates
+# configs/step4/freeze_inventory.json (scripts/freeze_inventory.py check).
+transformers==5.20.1
+accelerate==1.15.0
+ultralytics==8.4.183
+qwen-vl-utils==0.0.14
 tqdm>=4.66
 pyyaml>=6.0
 # MF4 reader (notebooks 10/11/16). canmatrix 1.3.0 (2026-10-01) breaks
