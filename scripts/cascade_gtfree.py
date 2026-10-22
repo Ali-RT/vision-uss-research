@@ -102,15 +102,21 @@ def vlm_sequences(scored: pd.DataFrame) -> pd.DataFrame:
     ok = sc[~sc.err].copy()
     ok["cb"] = [vlm_bin(n) for n in ok.crop_name]
     ok["fb"] = [vlm_bin(n) for n in ok.full_name]
+    # USS arm with full-frame fallback, per FRAME (Step 4 M2 pin): a frame with
+    # no USS crop (no track, or the projected region falls off the image) uses
+    # its full-frame vote. Tier D sequences are tracked or untracked as a whole,
+    # so this equals the former per-sequence rule except for off-image frames.
+    has_crop = (ok.crop.fillna("").astype(str) != "") if "crop" in ok else ok.uss_track.astype(bool)
+    ok["ub"] = ok.cb.where(has_crop, ok.fb)
     base = sc.groupby("sequence_id").agg(target_object=("target_object", "first"),
                                          truth=("truth", "first"),
                                          uss_track=("uss_track", "first"),
                                          vlm_frames=("err", "size"),
                                          vlm_error_frames=("err", "sum"))
-    votes = ok.groupby("sequence_id").agg(u=("cb", vote), n=("fb", vote))
+    votes = ok.groupby("sequence_id").agg(u=("ub", vote), n=("fb", vote))
     v = base.join(votes)
     v["vlm_status"] = (v.vlm_error_frames < v.vlm_frames).map({True: "ok", False: "vlm_failed"})
-    v["uss_raw"] = v.u.where(v.uss_track.astype(bool), v.n)     # None = abstained
+    v["uss_raw"] = v.u                                          # None = abstained
     v["full_raw"] = v.n
     good = v.vlm_status == "ok"
     v["uss"] = v.uss_raw.where(~good | v.uss_raw.notna(), "high")   # abstain -> stop
