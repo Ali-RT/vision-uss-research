@@ -183,8 +183,8 @@ def test_failed_detector_frames_do_not_vote(tmp_path, monkeypatch):
     _edit(crops, lambda d: d.assign(crop_status=np.where(d.sequence_id == "kC1_20190201_x", "det_failed",
                                                          d.crop_status)))
     sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
-    assert sd.loc["kC0_20190200_x", "plain_mode"] == "high" and sd.loc["kC0_20190200_x", "detector"] == "high"
-    assert "kC1_20190201_x" not in sd.index and acct["C"]["excluded_seqs"] == 1
+    assert sd.loc["C|kC0_20190200_x", "plain_mode"] == "high" and sd.loc["C|kC0_20190200_x", "detector"] == "high"
+    assert "C|kC1_20190201_x" not in sd.index and acct["C"]["excluded_seqs"] == 1
     assert acct["C"]["frames"]["detector_failed"] == 5
 
 
@@ -195,7 +195,7 @@ def test_missing_outputs_are_excluded_not_dropped(tmp_path, monkeypatch):
     _edit(Path(cfg["rotations"]["C"]["vlm_scored"][0]),          # partial: one frame missing
           lambda d: d[~((d.sequence_id == "cC2_20190202_x") & (d.frame_idx == 2))])
     sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
-    assert {"cC0_20190200_x", "cC1_20190201_x"}.isdisjoint(sd.index)
+    assert {"C|cC0_20190200_x", "C|cC1_20190201_x"}.isdisjoint(sd.index)
     assert acct["C"]["excluded_seqs"] == 2 and acct["C"]["requested_seqs"] == 24
     assert acct["C"]["frames"]["vlm_missing"] == 4 and acct["C"]["partial_seqs"]["vlm"] == 1
     assert ep.loc["P2b", "requested"] == 8 and np.isclose(ep.loc["P2b", "excluded_frac"], 2 / 8)
@@ -235,3 +235,73 @@ def test_missing_rotation_and_unavailable_comparator(tmp_path, monkeypatch):
     assert not ep.loc["S1a", "pass"] and ep.loc["S1a", "requested"] == 8
     assert not ep.loc["claim_vs_gate_conf", "pass"]
     assert ep.loc["claim_NI_P1_vs_gate_conf", "note"] == "gate calibration unavailable"
+
+
+def test_records_keep_rotation_identity(tmp_path, monkeypatch):
+    """The same sequence is held out in C and known in D: it must count once per
+    rotation and population, and losing the held-out record must not be hidden
+    by the surviving known record."""
+    cfg = _build(tmp_path, monkeypatch)
+    rd = cfg["rotations"]["D"]
+    shared = "hC0_20190200_x"                                  # tier C held-out tree sequence
+    src = pd.read_csv(tmp_path / "scoredC.csv")
+    srow = src[src.sequence_id == shared].assign(target_object="pole", truth="high",
+                                                  crop_name="pole", full_name="pole")
+    for f in ("scoredD.csv", "fixedD.csv"):
+        pd.concat([pd.read_csv(tmp_path / f), srow]).to_csv(tmp_path / f, index=False)
+    fr = pd.read_csv(rd["frames"])
+    pd.concat([fr, srow[["sequence_id", "camera", "frame_idx", "target_object"]]]).to_csv(rd["frames"], index=False)
+    crops = Path(rd["det_test"]) / "crops.csv"
+    dcr = pd.read_csv(crops)
+    extra = dcr[dcr.sequence_id == "kD0_20190200_x"].assign(sequence_id=shared)
+    pd.concat([dcr, extra]).to_csv(crops, index=False)
+    # lose the HELD-OUT (tier C) record entirely; the known (tier D) record survives
+    cc = Path(cfg["rotations"]["C"]["det_test"]) / "crops.csv"
+    _edit(cc, lambda d: d.assign(crop_status=np.where(d.sequence_id == shared, "det_failed", d.crop_status)))
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert "D|" + shared in sd.index and "C|" + shared not in sd.index
+    assert sd.loc["D|" + shared, "population"] == "known"
+    held = sd[sd.population == "heldout"]
+    assert len(held) == 15 and (held.rotation + "|" + held.sequence_id).is_unique   # 8 + 8 - 1 lost
+    assert ep.loc["P1", "requested"] == 8 and np.isclose(ep.loc["P1", "excluded_frac"], 1 / 8)
+    assert np.isclose(ep.loc["claim_bypass_vs_gate_free", "excluded_frac"], 1 / 16)
+
+
+def test_conflicting_crop_field_duplicate_raises(tmp_path, monkeypatch):
+    import pytest
+    cfg = _build(tmp_path, monkeypatch)
+    path = Path(cfg["rotations"]["C"]["vlm_scored"][0])
+    d = pd.read_csv(path)
+    pd.concat([d, d.iloc[[0]].assign(crop="")]).to_csv(path, index=False)   # same names, crop differs
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        _run(tmp_path, monkeypatch, cfg)
+
+
+def test_conflicting_detector_duplicate_raises(tmp_path, monkeypatch):
+    import pytest
+    cfg = _build(tmp_path, monkeypatch)
+    crops = Path(cfg["rotations"]["C"]["det_test"]) / "crops.csv"
+    d = pd.read_csv(crops)
+    pd.concat([d, d.iloc[[0]].assign(class_name="curbstone")]).to_csv(crops, index=False)
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        _run(tmp_path, monkeypatch, cfg)
+
+
+def test_all_rotations_missing_is_counted_no_go(tmp_path, monkeypatch):
+    import json
+    cfg = _build(tmp_path, monkeypatch)
+    for rc in cfg["rotations"].values():
+        rc["det_test"] = str(tmp_path / "nonexistent")
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert len(sd) == 0 and not ep["pass"].any()
+    assert json.loads((tmp_path / "eval" / "decision.json").read_text())["GO"] is False
+
+
+def test_real_frozen_population_counts():
+    """Counts from the committed frozen frame lists (no predictions involved)."""
+    root = Path(__file__).resolve().parents[1] / "configs" / "step4"
+    lists = {r: pd.read_csv(root / f"tierd_frames_{r}.csv") for r in ("woodenboard", "speedbump", "bush", "bollard")}
+    lists["treecubehose"] = pd.read_csv(root / "tierc_frames_treecubehose.csv")
+    held = {r: f[f.population == "heldout"].sequence_id.nunique() for r, f in lists.items()}
+    assert held["woodenboard"] + held["speedbump"] == 391                 # S1
+    assert sum(held.values()) == 1204                                     # bypass claim population

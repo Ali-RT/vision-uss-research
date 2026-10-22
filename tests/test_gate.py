@@ -298,3 +298,31 @@ def test_freeze_check_detects_hash_and_runtime_mismatch(tmp_path, monkeypatch, c
     p.write_text(json.dumps(inv))
     with pytest.raises(SystemExit):
         fi.check(tmp_path, p)
+
+
+def test_freeze_declared_absent_and_m3_log(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import freeze_inventory as fi
+    monkeypatch.setattr(fi, "git", lambda *a: "")
+    inv = {"code_sha": "abc", "code_paths": ["src"], "runtime": {}, "files": {},
+           "declared_absent": ["reports/eval_holdbush/inference_status.csv"],
+           "m3_outputs": ["gate/gate_v1/gate_*"]}
+    p = tmp_path / "inv.json"
+    p.write_text(json.dumps(inv))
+    fi.check(tmp_path, p)
+    (tmp_path / "reports/eval_holdbush").mkdir(parents=True)
+    (tmp_path / "reports/eval_holdbush/inference_status.csv").write_text("x")
+    with pytest.raises(SystemExit):
+        fi.check(tmp_path, p)
+    assert "declared-absent" in capsys.readouterr().out
+    out = tmp_path / "log.json"
+    (tmp_path / "gate/gate_v1/gate_bush").mkdir(parents=True)
+    (tmp_path / "gate/gate_v1/gate_bush/calibration.json").write_text("{}")
+    fi.log(tmp_path, p, out)
+    assert "gate/gate_v1/gate_bush/calibration.json" in json.loads(out.read_text())
+    (tmp_path / "gate/gate_v1/gate_bush/calibration.json").write_text('{"tau": 1}')
+    with pytest.raises(SystemExit, match="changed after it was logged"):
+        fi.log(tmp_path, p, out)

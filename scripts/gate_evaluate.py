@@ -112,14 +112,18 @@ def frame_labels(det: pd.DataFrame, feats: np.ndarray, gate_dir: Path, class_ids
 
 
 def check_vlm_rows(df: pd.DataFrame, label: str) -> tuple[pd.DataFrame, int]:
-    """Drop exact duplicate frame rows (counted); conflicting duplicates raise."""
-    cols = [c for c in ("crop_name", "full_name", "truth", "error") if c in df]
+    """Exact duplicate rows (every column equal) are dropped and counted; any
+    other repeated frame key raises - fields such as `crop` or `uss_track`
+    change the USS fallback, so no non-identical duplicate is ever resolved
+    by picking one. Used for VLM outputs and detector crop rows alike."""
     dup = df.duplicated(KEYS, keep=False)
     if dup.any():
-        d = df[dup]
-        conflict = d.groupby(KEYS)[cols].nunique(dropna=False).max(axis=1) > 1
+        d = df[dup].astype(str).fillna("")
+        distinct = d.drop_duplicates()
+        conflict = distinct.duplicated(KEYS, keep=False)
         if conflict.any():
-            raise ValueError(f"{label}: {int(conflict.sum())} frame keys with conflicting duplicate rows")
+            n = distinct[conflict][KEYS].drop_duplicates().shape[0]
+            raise ValueError(f"{label}: {n} frame keys with conflicting duplicate rows")
     n_dup = int(df.duplicated(KEYS).sum())
     return df.drop_duplicates(KEYS), n_dup
 
@@ -252,6 +256,8 @@ def load_rotation(rot: str, rc: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]
     frames = pd.read_csv(rc["frames"])
     if frames.duplicated(KEYS).any():
         raise ValueError(f"{rot}: duplicate keys in the frozen frame list")
+    if (frames.groupby("sequence_id").target_object.nunique() > 1).any():
+        raise ValueError(f"{rot}: a sequence has more than one target type in the frozen frame list")
     low = LOW_TYPES | set(rc.get("low_extra", []))
     held = set(rc["heldout"])
     member = frames.drop_duplicates("sequence_id").set_index("sequence_id")[["target_object"]]
@@ -291,8 +297,7 @@ def load_rotation(rot: str, rc: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]
     fx["truth"] = fx.sequence_id.map(member.truth)
     scored["uss_track"] = scored["uss_track"].fillna(True) if "uss_track" in scored else True
     fx["uss_track"] = True
-    det = restrict(pd.read_csv(Path(rc["det_test"]) / "crops.csv"))
-    det, dup_d = det.drop_duplicates(KEYS), int(det.duplicated(KEYS).sum())
+    det, dup_d = check_vlm_rows(restrict(pd.read_csv(Path(rc["det_test"]) / "crops.csv")), f"{rot} detector")
     feats = np.load(Path(rc["det_test"]) / "features.npy")
     fl, unavailable = frame_labels(det, feats, Path(rc["gate"]), class_ids)
     av = pd.DataFrame({
@@ -339,9 +344,18 @@ def main() -> None:
         accounting.append(acct)
         if len(sd):
             seqs.append(sd)
+    # records are keyed by (rotation, sequence): one sequence can be held out in
+    # one rotation and known in another, and must never cross populations
     member = pd.concat(members)
-    allseq = pd.concat(seqs) if seqs else pd.DataFrame(columns=["tier"])
-    allseq.index.name = "sequence_id"
+    member["sequence_id"] = member.index
+    member.index = member.rotation + "|" + member.sequence_id
+    cols = ["truth", "type", "frames", "day", "rotation", "tier", "population", *ARMS,
+            *[f"deferred_{k}" for k in ("plain_mode", "plain_strict", *GATES)]]
+    allseq = pd.concat(seqs) if seqs else pd.DataFrame(columns=cols)
+    allseq["sequence_id"] = allseq.index
+    allseq.index = allseq.rotation.astype(str) + "|" + allseq.sequence_id.astype(str)
+    allseq.index.name = "record"
+    assert not member.index.duplicated().any() and not allseq.index.duplicated().any()
     acct = pd.DataFrame(accounting).set_index("rotation")
     a.out.mkdir(parents=True, exist_ok=True)
     allseq.to_csv(a.out / "sequence_decisions.csv")
