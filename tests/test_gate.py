@@ -236,3 +236,20 @@ def test_gt_rows_fills_missing_target_column(tmp_path):
     assert out.set_index("sequence_id").loc["s3", "target_object"] == "pole"
     with pytest.raises(AssertionError, match="held-out"):
         gf.gt_rows({"a": a, "b": b}, {"a": {"pole"}, "b": {"pole"}}, set())   # guard still works
+
+
+def test_tier_c_frames_fixed_and_test_only():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import tierc_frames as tc
+    rows = [("test", "t1", "tree", "rear", i) for i in range(8)] + \
+           [("test", "k1", "pole", "front", i) for i in range(3)] + \
+           [("train", "x1", "pole", "front", 0)] + [("test", "t1", "tree", "rear", 0)]   # duplicate box
+    m = pd.DataFrame(rows, columns=["split", "sequence_id", "target_object", "camera", "frame_idx"])
+    a = tc.tier_c_frames(m, {"tree"})
+    b = tc.tier_c_frames(m.sample(frac=1, random_state=3), {"tree"})
+    pd.testing.assert_frame_equal(a, b)                       # independent of row order
+    assert (a.groupby("sequence_id").size() == pd.Series({"k1": 3, "t1": 5})).all()
+    assert "x1" not in set(a.sequence_id)
+    assert set(a.loc[a.sequence_id == "t1", "population"]) == {"heldout"}
