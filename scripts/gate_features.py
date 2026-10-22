@@ -120,8 +120,8 @@ def extract(rows: pd.DataFrame, idx: dict[str, Path], out: Path, device: str) ->
     import torch
     from PIL import Image
     from transformers import Dinov2Model
-    model = Dinov2Model.from_pretrained(g.DINO_MODEL).to(device).eval().float()
-    rev = getattr(model.config, "_commit_hash", None)
+    model = Dinov2Model.from_pretrained(g.DINO_MODEL, revision=g.DINO_REVISION).to(device).eval().float()
+    rev = g.DINO_REVISION                       # loaded by explicit revision (config hash may be None)
     feats = np.zeros((len(rows), g.FEAT_DIM), np.float32)
     status, sha, boxes = [], [], []
     batch, slots = [], []

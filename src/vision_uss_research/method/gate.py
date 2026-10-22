@@ -18,6 +18,8 @@ CROP_PX = 224              # §3.2 step 5
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 DINO_MODEL = "facebook/dinov2-small"
+# pinned at M2 (Hugging Face commit of facebook/dinov2-small, last modified 2023-09-06)
+DINO_REVISION = "ed25f3a31f01632728cabb09d1542f84ab7b0056"
 FEAT_DIM, HIDDEN_DIM, EMB_DIM = 384, 512, 128   # §3.3 head
 TEMPERATURE = 0.1          # §3.3 loss
 PER_CLASS = 16             # §3.3 sampler: crops per class per batch
