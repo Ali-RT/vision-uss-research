@@ -45,6 +45,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from vision_uss_research.method import gate as g  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 TRANSFORM_VERSION = "pad10_clip_min8_rgb_224_bilinear_aa_imagenet_v1"
 KEYS = ["sequence_id", "camera", "frame_idx"]
@@ -97,22 +98,44 @@ def gt_rows(rotations: dict[str, Path], heldout: dict[str, set[str]], reserved: 
     return out
 
 
-def det_rows(raw: pd.DataFrame, frames: pd.Series, class_ids: dict[str, int]) -> pd.DataFrame:
-    """Selected detection per listed frame (image stem); no detection kept as a row."""
+DET_FAILED, DET_MISSING = "det_failed", "det_missing"
+
+
+def det_rows(raw: pd.DataFrame, frames: pd.Series, class_ids: dict[str, int],
+             status: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Selected detection per requested frame (image stem).
+
+    With a notebook 07 status file the status is authoritative and validated
+    against the raw rows (n_detections): a frame whose inference failed is
+    DET_FAILED, a requested frame absent from the status file is DET_MISSING;
+    neither is ever turned into "no detection". Without a status file (legacy
+    tier D runs) every requested frame counts as evaluated and the rows carry
+    det_coverage = "unverified"."""
+    st_of = None
+    coverage = "unverified"
+    if status is not None:
+        import cascade_gtfree as cg
+        st_of, coverage = cg._validate_status(status, raw)
     rows = []
     by_img = dict(tuple(raw.groupby("image")))
     for img in frames:
+        seq, cam, idx = img.rsplit("_", 2)
+        base = {"image": img, "sequence_id": seq, "camera": cam, "frame_idx": int(idx),
+                "class_name": None, "conf": np.nan, "x0": np.nan, "y0": np.nan,
+                "x1": np.nan, "y1": np.nan, "no_detection": False, "det_status": "ok",
+                "det_coverage": coverage}
+        if st_of is not None and st_of.get(img) != "ok":
+            base["det_status"] = DET_MISSING if img not in st_of.index else DET_FAILED
+            rows.append(base)
+            continue
         d = by_img.get(img)
         sel = None if d is None else g.select_detection(d, class_ids)
-        seq, cam, idx = img.rsplit("_", 2)
         if sel is None:
-            rows.append({"image": img, "sequence_id": seq, "camera": cam, "frame_idx": int(idx),
-                         "class_name": None, "conf": np.nan, "x0": np.nan, "y0": np.nan,
-                         "x1": np.nan, "y1": np.nan, "no_detection": True})
+            base["no_detection"] = True
         else:
-            rows.append({"image": img, "sequence_id": seq, "camera": cam, "frame_idx": int(idx),
-                         "class_name": sel.pred, "conf": float(sel.conf), "x0": sel.x0, "y0": sel.y0,
-                         "x1": sel.x1, "y1": sel.y1, "no_detection": False})
+            base.update(class_name=sel.pred, conf=float(sel.conf), x0=sel.x0, y0=sel.y0,
+                        x1=sel.x1, y1=sel.y1)
+        rows.append(base)
     return pd.DataFrame(rows)
 
 
@@ -132,6 +155,9 @@ def extract(rows: pd.DataFrame, idx: dict[str, Path], out: Path, device: str) ->
             batch.clear(), slots.clear()
 
     for i, r in enumerate(rows.itertuples(index=False)):
+        if getattr(r, "det_status", "ok") != "ok":     # detector failure: no crop, no vote
+            status.append(r.det_status), sha.append(""), boxes.append("")
+            continue
         if getattr(r, "no_detection", False):
             status.append("no_detection"), sha.append(""), boxes.append("")
             continue
@@ -181,6 +207,8 @@ def main() -> None:
     ap.add_argument("--raw", type=Path, help="det: raw_predictions.csv")
     ap.add_argument("--status", type=Path, help="det: inference_status.csv (ok frames)")
     ap.add_argument("--frames", type=Path, help="det: CSV with sequence_id,camera,frame_idx")
+    ap.add_argument("--require-status", action="store_true",
+                    help="fail without --status (tier C: execution evidence is mandatory)")
     ap.add_argument("--limit", type=int, default=0, help="smoke test: first N rows only (never for M2/M3 outputs)")
     a = ap.parse_args()
     idx = image_index(a.images)
@@ -193,13 +221,17 @@ def main() -> None:
     else:
         names = json.loads((a.class_names_from / "provenance.json").read_text())["class_names"]
         raw = pd.read_csv(a.raw)
-        if a.status:
-            st = pd.read_csv(a.status)
-            frames = st.loc[st.status == "ok", "image"]
-        else:
+        st = pd.read_csv(a.status) if a.status else None
+        if a.frames:                     # frozen frame list: every listed frame is requested
             f = pd.read_csv(a.frames)
+            assert not f.duplicated(KEYS).any(), "duplicate keys in the frame list"
             frames = pd.Series([stem(*k) for k in f[KEYS].itertuples(index=False)])
-        rows = det_rows(raw, frames, {n: i for i, n in enumerate(names)})
+        else:                            # validation: every frame notebook 07 ran on
+            assert st is not None, "det mode needs --frames or --status"
+            frames = st.loc[st.status == "ok", "image"]
+        if a.require_status:
+            assert st is not None, "--require-status: the detector status file is mandatory"
+        rows = det_rows(raw, frames, {n: i for i, n in enumerate(names)}, st)
     if a.limit:
         rows = rows.head(a.limit)
         print(f"SMOKE: limited to {a.limit} rows - not a protocol output")

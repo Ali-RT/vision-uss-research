@@ -67,8 +67,8 @@ def test_unique_mode_and_routing_labels():
     assert ge.unique_mode(pd.Series(["pole", "none"])) == "none"
 
 
-def test_main_end_to_end_synthetic(tmp_path, monkeypatch):
-    """Two rotations (tiers C and D) through gate_train -> gate_evaluate."""
+def _build(tmp_path, monkeypatch, n_held=8):
+    """Two rotations (tiers C and D) through gate_train; returns (cfg dict, paths)."""
     import json
     import pytest
     pytest.importorskip("torch")
@@ -86,11 +86,11 @@ def test_main_end_to_end_synthetic(tmp_path, monkeypatch):
 
     gt_rows, gt_feats = [], []
     for c in ("curbstone", "pole"):
-        for s in range(6):
+        for s_ in range(6):
             for k in range(5):
-                gt_rows.append({"sequence_id": f"tr{c}{s}_2019010{s}_x", "camera": "rear", "frame_idx": k,
+                gt_rows.append({"sequence_id": f"tr{c}{s_}_2019010{s_}_x", "camera": "rear", "frame_idx": k,
                                 "x0": 0, "y0": 0, "x1": 40, "y1": 40, "class_name": c, "target_object": c,
-                                "split_C": "train" if s < 5 else "val", "split_D": "train" if s < 5 else "val",
+                                "split_C": "train" if s_ < 5 else "val", "split_D": "train" if s_ < 5 else "val",
                                 "crop_status": "valid"})
                 gt_feats.append(vec(c))
     gd = tmp_path / "gt"; gd.mkdir()
@@ -101,14 +101,14 @@ def test_main_end_to_end_synthetic(tmp_path, monkeypatch):
         ds = tmp_path / f"ds{rot}"; ds.mkdir()
         (ds / "provenance.json").write_text(json.dumps({"class_names": names}))
         val = [r for r in gt_rows if r[f"split_{rot}"] == "val"]
-        test_seqs = [(f"h{rot}{i}_2019020{i % 4}_x", held_t, held_bin) for i in range(8)] + \
+        test_seqs = [(f"h{rot}{i}_2019020{i % 4}_x", held_t, held_bin) for i in range(n_held)] + \
                     [(f"k{rot}{i}_2019020{i % 4}_x", "pole", "high") for i in range(8)] + \
                     [(f"c{rot}{i}_2019020{i % 4}_x", "curbstone", "low") for i in range(8)]
         man = [{"split": "val", "sequence_id": r["sequence_id"], "target_object": r["class_name"],
                 "camera": "rear", "frame_idx": r["frame_idx"], "x0": 0, "y0": 0, "x1": 40, "y1": 40,
                 "class_id": names.index(r["class_name"])} for r in val]
-        man += [{"split": "test", "sequence_id": s, "target_object": t, "camera": "rear", "frame_idx": f,
-                 "x0": 0, "y0": 0, "x1": 40, "y1": 40, "class_id": 0} for s, t, _ in test_seqs for f in range(3)]
+        man += [{"split": "test", "sequence_id": s_, "target_object": t, "camera": "rear", "frame_idx": f,
+                 "x0": 0, "y0": 0, "x1": 40, "y1": 40, "class_id": 0} for s_, t, _ in test_seqs for f in range(3)]
         pd.DataFrame(man).to_csv(ds / "dataset_manifest.csv", index=False)
         dv = tmp_path / f"detval{rot}"; dv.mkdir()
         pd.DataFrame([{**{k: r[k] for k in ("sequence_id", "camera", "frame_idx", "x0", "y0", "x1", "y1",
@@ -121,35 +121,117 @@ def test_main_end_to_end_synthetic(tmp_path, monkeypatch):
                                           "--manifest", str(ds / "dataset_manifest.csv"),
                                           "--heldout", held_t, "--out", str(gd_out)])
         gt.main()
-        # test detections: held-out sequences get a confident WRONG named class "pole"
-        det, feats, scored = [], [], []
-        for s, t, truth in test_seqs:
+        det, feats, scored, frames = [], [], [], []
+        for s_, t, truth in test_seqs:
             for f in range(3):
                 cls = "pole" if t in (held_t, "pole") else "curbstone"
-                det.append({"sequence_id": s, "camera": "rear", "frame_idx": f, "class_name": cls,
+                det.append({"sequence_id": s_, "camera": "rear", "frame_idx": f, "class_name": cls,
                             "conf": .8, "x0": 0, "y0": 0, "x1": 40, "y1": 40, "crop_status": "valid",
                             "feature_row": len(feats)})
                 feats.append(vec("woodenboard") if t == held_t else vec(cls))
-                scored.append({"sequence_id": s, "camera": "rear", "frame_idx": f, "target_object": t,
+                scored.append({"sequence_id": s_, "camera": "rear", "frame_idx": f, "target_object": t,
                                "truth": truth, "uss_track": True, "split": "test", "error": "",
                                "crop": "1,1,2,2", "crop_name": {"tree": "tree", "woodenboard": "wooden board",
                                                                "pole": "pole", "curbstone": "curb"}[t],
                                "full_name": "pole" if t == "pole" else "board" if t == "woodenboard" else "tree"})
+                frames.append({"sequence_id": s_, "camera": "rear", "frame_idx": f, "target_object": t})
         dt = tmp_path / f"dettest{rot}"; dt.mkdir()
         pd.DataFrame(det).to_csv(dt / "crops.csv", index=False)
         np.save(dt / "features.npy", np.stack(feats))
         pd.DataFrame(scored).to_csv(tmp_path / f"scored{rot}.csv", index=False)
         pd.DataFrame(scored).to_csv(tmp_path / f"fixed{rot}.csv", index=False)
+        pd.DataFrame(frames).to_csv(tmp_path / f"frames{rot}.csv", index=False)
         cfg["rotations"][rot] = {"tier": tier, "heldout": [held_t], "dataset": str(ds), "gate": str(gd_out),
                                  "det_test": str(dt), "vlm_scored": [str(tmp_path / f"scored{rot}.csv")],
-                                 "vlm_fixed": str(tmp_path / f"fixed{rot}.csv")}
+                                 "vlm_fixed": str(tmp_path / f"fixed{rot}.csv"),
+                                 "frames": str(tmp_path / f"frames{rot}.csv")}
+    return cfg
+
+
+def _run(tmp_path, monkeypatch, cfg):
+    import json
     (tmp_path / "cfg.json").write_text(json.dumps(cfg))
     out = tmp_path / "eval"
     monkeypatch.setattr(sys, "argv", ["x", "--config", str(tmp_path / "cfg.json"), "--out", str(out)])
     ge.main()
-    sd = pd.read_csv(out / "sequence_decisions.csv", index_col=0)
+    return (pd.read_csv(out / "sequence_decisions.csv", index_col=0),
+            pd.read_csv(out / "endpoints.csv").set_index("endpoint"),
+            json.loads((out / "accounting.json").read_text()))
+
+
+def test_main_end_to_end_synthetic(tmp_path, monkeypatch):
+    sd, ep, acct = _run(tmp_path, monkeypatch, _build(tmp_path, monkeypatch))
     held = sd[sd.population == "heldout"]
     assert (held.plain_mode == "high").all()                              # wrong "pole" bypasses
     assert set(held.loc[held.rotation == "D", "gate_trained"]) == {"low"}   # gate defers -> VLM board
-    assert json.loads((out / "decision.json").read_text())["GO"] in (True, False)
-    assert (pd.read_csv(out / "accounting.csv").excluded == 0).all()
+    assert all(a["excluded_seqs"] == 0 for a in acct.values())
+    assert "claim_vs_gate_free" in ep.index
+
+
+def _edit(path, fn):
+    df = pd.read_csv(path)
+    fn(df).to_csv(path, index=False)
+
+
+def test_failed_detector_frames_do_not_vote(tmp_path, monkeypatch):
+    cfg = _build(tmp_path, monkeypatch)
+    crops = Path(cfg["rotations"]["C"]["det_test"]) / "crops.csv"
+    # known pole sequence kC0: frames 1,2 failed (prefixed error) -> decide from frame 0 alone
+    _edit(crops, lambda d: d.assign(crop_status=np.where((d.sequence_id == "kC0_20190200_x") & (d.frame_idx > 0),
+                                                         "error:FileNotFoundError", d.crop_status)))
+    # kC1: every frame failed -> no decision, counted
+    _edit(crops, lambda d: d.assign(crop_status=np.where(d.sequence_id == "kC1_20190201_x", "det_failed",
+                                                         d.crop_status)))
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert sd.loc["kC0_20190200_x", "plain_mode"] == "high" and sd.loc["kC0_20190200_x", "detector"] == "high"
+    assert "kC1_20190201_x" not in sd.index and acct["C"]["excluded_seqs"] == 1
+    assert acct["C"]["frames"]["detector_failed"] == 5
+
+
+def test_missing_outputs_are_excluded_not_dropped(tmp_path, monkeypatch):
+    cfg = _build(tmp_path, monkeypatch)
+    _edit(Path(cfg["rotations"]["C"]["vlm_scored"][0]), lambda d: d[d.sequence_id != "cC0_20190200_x"])
+    _edit(Path(cfg["rotations"]["C"]["vlm_fixed"]), lambda d: d[d.sequence_id != "cC1_20190201_x"])
+    _edit(Path(cfg["rotations"]["C"]["vlm_scored"][0]),          # partial: one frame missing
+          lambda d: d[~((d.sequence_id == "cC2_20190202_x") & (d.frame_idx == 2))])
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert {"cC0_20190200_x", "cC1_20190201_x"}.isdisjoint(sd.index)
+    assert acct["C"]["excluded_seqs"] == 2 and acct["C"]["requested_seqs"] == 24
+    assert acct["C"]["frames"]["vlm_missing"] == 4 and acct["C"]["partial_seqs"]["vlm"] == 1
+    assert ep.loc["P2b", "requested"] == 8 and np.isclose(ep.loc["P2b", "excluded_frac"], 2 / 8)
+    assert not ep.loc["P2b", "pass"]                             # 25% > 2%
+
+
+def test_conflicting_duplicates_raise(tmp_path, monkeypatch):
+    import pytest
+    cfg = _build(tmp_path, monkeypatch)
+    path = Path(cfg["rotations"]["C"]["vlm_scored"][0])
+    d = pd.read_csv(path)
+    dup = d.iloc[[0]].assign(crop_name="car")
+    pd.concat([d, dup]).to_csv(path, index=False)
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        _run(tmp_path, monkeypatch, cfg)
+
+
+def test_concentrated_exclusion_fails_p1(tmp_path, monkeypatch):
+    cfg = _build(tmp_path, monkeypatch, n_held=40)
+    crops = Path(cfg["rotations"]["C"]["det_test"]) / "crops.csv"
+    # 2 of 40 held-out tall sequences lost = 5% of P1, but only 2 / 56 = 3.6% of tier C
+    lost = {"hC0_20190200_x", "hC1_20190201_x"}
+    _edit(crops, lambda d: d.assign(crop_status=np.where(d.sequence_id.isin(lost), "det_missing", d.crop_status)))
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert np.isclose(ep.loc["P1", "excluded_frac"], 2 / 40) and not ep.loc["P1", "pass"]
+
+
+def test_missing_rotation_and_unavailable_comparator(tmp_path, monkeypatch):
+    import json
+    cfg = _build(tmp_path, monkeypatch)
+    calp = Path(cfg["rotations"]["C"]["gate"]) / "calibration.json"
+    cal = json.loads(calp.read_text()); cal["confidence"]["tau"] = None
+    calp.write_text(json.dumps(cal))
+    cfg["rotations"]["D"]["det_test"] = str(tmp_path / "nonexistent")
+    sd, ep, acct = _run(tmp_path, monkeypatch, cfg)
+    assert acct["D"]["evaluated_seqs"] == 0 and acct["D"]["inputs_missing"]
+    assert not ep.loc["S1a", "pass"] and ep.loc["S1a", "requested"] == 8
+    assert not ep.loc["claim_vs_gate_conf", "pass"]
+    assert ep.loc["claim_NI_P1_vs_gate_conf", "note"] == "gate calibration unavailable"

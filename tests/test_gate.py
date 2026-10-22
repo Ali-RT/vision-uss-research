@@ -253,3 +253,48 @@ def test_tier_c_frames_fixed_and_test_only():
     assert (a.groupby("sequence_id").size() == pd.Series({"k1": 3, "t1": 5})).all()
     assert "x1" not in set(a.sequence_id)
     assert set(a.loc[a.sequence_id == "t1", "population"]) == {"heldout"}
+
+
+def test_det_rows_status_authoritative():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import gate_features as gf
+    raw = pd.DataFrame({"image": ["s1_rear_00000"], "pred": ["pole"], "conf": [0.9],
+                        "x0": [0], "y0": [0], "x1": [10], "y1": [50]})
+    frames = pd.Series(["s1_rear_00000", "s1_rear_00001", "s1_rear_00002", "s1_rear_00003"])
+    st = pd.DataFrame({"image": ["s1_rear_00000", "s1_rear_00001", "s1_rear_00002"],
+                       "status": ["ok", "ok", "failed"], "n_detections": [1, 0, 0]})
+    d = gf.det_rows(raw, frames, CIDS, st).set_index("image")
+    assert d.loc["s1_rear_00000", "class_name"] == "pole" and d.loc["s1_rear_00000", "det_coverage"] == "verified"
+    assert bool(d.loc["s1_rear_00001", "no_detection"])                  # evaluated, empty
+    assert d.loc["s1_rear_00002", "det_status"] == gf.DET_FAILED          # never "no detection"
+    assert d.loc["s1_rear_00003", "det_status"] == gf.DET_MISSING
+    with pytest.raises(ValueError, match="n_detections"):                # status / raw disagreement
+        gf.det_rows(raw, frames, CIDS, st.assign(n_detections=[0, 0, 0]))
+    legacy = gf.det_rows(raw, frames, CIDS, None)
+    assert (legacy.det_coverage == "unverified").all() and (legacy.det_status == "ok").all()
+
+
+def test_freeze_check_detects_hash_and_runtime_mismatch(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import freeze_inventory as fi
+    monkeypatch.setattr(fi, "git", lambda *a: "")           # code unchanged, clean tree
+    (tmp_path / "a.csv").write_text("x\n1\n")
+    inv = {"code_sha": "abc", "code_paths": ["src"], "runtime": {"python": fi.runtime()["python"]},
+           "files": {"a.csv": {"sha256": fi.sha256(tmp_path / "a.csv"), "bytes": 4}}}
+    p = tmp_path / "inv.json"
+    p.write_text(json.dumps(inv))
+    fi.check(tmp_path, p)                                    # passes
+    (tmp_path / "a.csv").write_text("x\n2\n")
+    with pytest.raises(SystemExit):
+        fi.check(tmp_path, p)
+    assert "hash mismatch a.csv" in capsys.readouterr().out
+    (tmp_path / "a.csv").write_text("x\n1\n")
+    inv["runtime"]["python"] = "0.0.0"
+    p.write_text(json.dumps(inv))
+    with pytest.raises(SystemExit):
+        fi.check(tmp_path, p)
