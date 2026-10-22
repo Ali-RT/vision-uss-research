@@ -218,3 +218,21 @@ def test_gate_train_end_to_end_synthetic(tmp_path, monkeypatch):
         assert cal[k]["available"] and cal[k]["q"] == 10
         assert cal[k]["measured_retention"] >= 0.95 or not cal[k]["feasible"]
     assert cal["trained"]["unreliable_calibration"]          # 10 < 200 detections
+
+
+def test_gt_rows_fills_missing_target_column(tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import gate_features as gf
+    a = _write_rotation(tmp_path, "a", [
+        ("train", "s1", "curbstone", "rear", 0, "x", "", 1, 2, 30, 40, 0),
+        ("test", "s3", "pole", "rear", 0, "x", "", 1, 2, 30, 40, 3)])
+    b = _write_rotation(tmp_path, "b", [
+        ("val", "s1", "curbstone", "rear", 0, "x", "", 1, 2, 30, 40, 0),
+        ("train", "s3", "pole", "rear", 0, "x", "", 1, 2, 30, 40, 3)])
+    pd.read_csv(b).drop(columns="target_object").to_csv(b, index=False)   # old-style manifest
+    out = gf.gt_rows({"a": a, "b": b}, {"a": {"pole"}, "b": {"woodenboard"}}, set())
+    assert out.set_index("sequence_id").loc["s3", "target_object"] == "pole"
+    with pytest.raises(AssertionError, match="held-out"):
+        gf.gt_rows({"a": a, "b": b}, {"a": {"pole"}, "b": {"pole"}}, set())   # guard still works

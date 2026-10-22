@@ -61,9 +61,19 @@ def image_index(images_dir: Path) -> dict[str, Path]:
 
 def gt_rows(rotations: dict[str, Path], heldout: dict[str, set[str]], reserved: set[str]) -> pd.DataFrame:
     """Union of train/val GT boxes; split_<rotation> in {train, val, ''}."""
+    mans = {rot: pd.read_csv(path) for rot, path in rotations.items()}
+    # older manifests (the bollard rotation) predate the target_object column;
+    # the target is a property of the sequence, so take it from the others
+    seq_target = pd.concat([m[["sequence_id", "target_object"]] for m in mans.values()
+                            if "target_object" in m]).drop_duplicates()
+    assert not seq_target.sequence_id.duplicated().any(), "a sequence has two target types"
+    seq_target = seq_target.set_index("sequence_id").target_object
     frames = []
     for rot, man_path in rotations.items():
-        m = pd.read_csv(man_path)
+        m = mans[rot]
+        if "target_object" not in m:
+            m = m.assign(target_object=m.sequence_id.map(seq_target))
+            assert m.target_object.notna().all(), f"{rot}: sequences without a known target type"
         names = json.loads((man_path.parent / "provenance.json").read_text())["class_names"]
         m = m[m.split.isin(["train", "val"])].copy()
         m["class_name"] = m.class_id.map(lambda i: names[int(i)])
