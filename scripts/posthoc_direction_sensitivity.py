@@ -26,21 +26,36 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 
 
-def directions(raw_root: Path, seqs: set[str], workers: int = 32) -> pd.Series:
-    """Driving direction straight from each sequence's metadata JSON (the
-    inventory copy on Drive has blank fields for most sequences)."""
-    from concurrent.futures import ThreadPoolExecutor
-    sys.path.insert(0, str(REPO / "src"))
-    from vision_uss_research.sequences import driving_direction
+DIRECTION_FILE = REPO / "configs" / "step4" / "driving_direction.csv"
 
-    def one(s):
-        try:
-            return s, driving_direction(raw_root / s)
-        except Exception:  # noqa: BLE001 - missing folder -> unknown
-            return s, "unknown"
-    with ThreadPoolExecutor(workers) as pool:
-        out = dict(pool.map(one, sorted(seqs)))
-    return pd.Series(out).str.lower().where(lambda x: x.isin(["forward", "backward"]))
+
+def directions(raw_root: Path | None, seqs: set[str], workers: int = 4) -> pd.Series:
+    """Driving direction per sequence from configs/step4/driving_direction.csv:
+    the metadata-JSON 'driving direction' tag as extracted by notebook 01's
+    inventory (2026-07-16); unknown where the JSON carries no such tag. With
+    --raw-root, the JSON tags are re-read (with Drive retries) as a cross-check
+    and disagreements are reported, never silently mixed in."""
+    d = pd.read_csv(DIRECTION_FILE).set_index("sequence_id").driving_direction.reindex(sorted(seqs))
+    d = d.str.lower().where(lambda x: x.isin(["forward", "backward"]))
+    if raw_root is not None:
+        from concurrent.futures import ThreadPoolExecutor
+        sys.path.insert(0, str(REPO / "src"))
+        from vision_uss_research.sequences import driving_direction, with_drive_retry
+
+        def one(s):
+            try:
+                return s, str(with_drive_retry(driving_direction, raw_root / s)).lower()
+            except Exception as e:  # noqa: BLE001
+                return s, f"read_error:{type(e).__name__}"
+        with ThreadPoolExecutor(workers) as pool:
+            js = pd.Series(dict(pool.map(one, sorted(seqs))))
+        both = d.notna() & js.isin(["forward", "backward"])
+        dis = (d[both] != js[both]).sum()
+        print(f"cross-check vs JSON: {int(both.sum())} comparable, {int(dis)} disagree; "
+              f"JSON reads: {js.str.split(':').str[0].value_counts().to_dict()}")
+        if dis:
+            raise SystemExit("direction file and metadata JSON disagree - nothing evaluated")
+    return d
 
 
 def restrict(frames: pd.DataFrame, direction: pd.Series) -> tuple[pd.DataFrame, dict]:
@@ -58,7 +73,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifacts", type=Path, required=True)
     ap.add_argument("--gate-run", default="gate_v1")
-    ap.add_argument("--raw-root", type=Path, required=True, help="raw sequence folders (metadata JSON)")
+    ap.add_argument("--raw-root", type=Path, default=None, help="optional: cross-check directions against the JSON")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     gd = a.artifacts / "gate" / a.gate_run
@@ -70,7 +85,7 @@ def main() -> None:
     known = inv.notna().mean()
     print(f"driving direction known for {inv.notna().sum()} / {len(inv)} sequences ({known:.0%})")
     if known < 0.8:
-        raise SystemExit("direction unknown for > 20% of sequences - check --raw-root; nothing evaluated")
+        raise SystemExit("direction unknown for > 20% of sequences - nothing evaluated")
     a.out.mkdir(parents=True, exist_ok=True)
     inv.rename("driving_direction").to_csv(a.out / "driving_direction.csv")
     stats = {}
