@@ -11,7 +11,7 @@ its driving-direction camera:
 No model is rerun; the GO decision of the protocol is unchanged.
 
 usage (Colab, after the evaluate stage):
-  python scripts/posthoc_direction_sensitivity.py --artifacts OUT --out OUT/gate/gate_v1/posthoc_dircam
+  python scripts/posthoc_direction_sensitivity.py --artifacts OUT --raw-root RAW --out OUT/gate/gate_v1/posthoc_dircam
 """
 from __future__ import annotations
 
@@ -26,12 +26,21 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 
 
-def find_inventory(artifacts: Path) -> Path:
-    found = sorted(list(artifacts.glob("inventory/*/inventory_metadata.csv"))
-                   + list(artifacts.glob("profiles/*/inventory_metadata.csv")))
-    if not found:
-        raise SystemExit(f"inventory_metadata.csv not found under {artifacts}")
-    return found[-1]
+def directions(raw_root: Path, seqs: set[str], workers: int = 32) -> pd.Series:
+    """Driving direction straight from each sequence's metadata JSON (the
+    inventory copy on Drive has blank fields for most sequences)."""
+    from concurrent.futures import ThreadPoolExecutor
+    sys.path.insert(0, str(REPO / "src"))
+    from vision_uss_research.sequences import driving_direction
+
+    def one(s):
+        try:
+            return s, driving_direction(raw_root / s)
+        except Exception:  # noqa: BLE001 - missing folder -> unknown
+            return s, "unknown"
+    with ThreadPoolExecutor(workers) as pool:
+        out = dict(pool.map(one, sorted(seqs)))
+    return pd.Series(out).str.lower().where(lambda x: x.isin(["forward", "backward"]))
 
 
 def restrict(frames: pd.DataFrame, direction: pd.Series) -> tuple[pd.DataFrame, dict]:
@@ -49,12 +58,21 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifacts", type=Path, required=True)
     ap.add_argument("--gate-run", default="gate_v1")
+    ap.add_argument("--raw-root", type=Path, required=True, help="raw sequence folders (metadata JSON)")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     gd = a.artifacts / "gate" / a.gate_run
     cfg = json.loads((gd / "evaluate_config.json").read_text())
-    inv = pd.read_csv(find_inventory(a.artifacts)).set_index("sequence_id").driving_direction
+    seqs = set()
+    for rc in cfg["rotations"].values():
+        seqs |= set(pd.read_csv(rc["frames"]).sequence_id)
+    inv = directions(a.raw_root, seqs)
+    known = inv.notna().mean()
+    print(f"driving direction known for {inv.notna().sum()} / {len(inv)} sequences ({known:.0%})")
+    if known < 0.8:
+        raise SystemExit("direction unknown for > 20% of sequences - check --raw-root; nothing evaluated")
     a.out.mkdir(parents=True, exist_ok=True)
+    inv.rename("driving_direction").to_csv(a.out / "driving_direction.csv")
     stats = {}
     for rot, rc in cfg["rotations"].items():
         f, stats[rot] = restrict(pd.read_csv(rc["frames"]), inv)
