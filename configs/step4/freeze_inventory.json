@@ -1,5 +1,5 @@
 {
- "code_sha": "0a3b6b8c1b91074d964a04d2935cf92937d2ca31",
+ "code_sha": "3a4528a90f0d02f1e1421976efdb4365cdace8e6",
  "code_paths": [
   "src",
   "scripts",
@@ -15,7 +15,7 @@
  ],
  "dino_revision": "ed25f3a31f01632728cabb09d1542f84ab7b0056",
  "runtime": {
-  "python": "3.13.15",
+  "python": "3.13.16",
   "torch": "2.11.0+cu130",
   "torchvision": "0.26.0+cu130",
   "transformers": "5.20.1",
