@@ -305,3 +305,32 @@ def test_real_frozen_population_counts():
     held = {r: f[f.population == "heldout"].sequence_id.nunique() for r, f in lists.items()}
     assert held["woodenboard"] + held["speedbump"] == 391                 # S1
     assert sum(held.values()) == 1204                                     # bypass claim population
+
+
+def test_combine_runs_earlier_run_precedence_and_within_run_conflict():
+    import pytest
+    base = {"sequence_id": "s", "camera": "rear", "truth": "low", "error": "", "full_name": "pole"}
+    r1 = pd.DataFrame([{**base, "frame_idx": 0, "crop_name": "board", "crop": "1,1,2,2"}])
+    r2 = pd.DataFrame([{**base, "frame_idx": 0, "crop_name": "pole", "crop": "3,3,4,4"},
+                       {**base, "frame_idx": 1, "crop_name": "board", "crop": "1,1,2,2"}])
+    out, n_dup, sup = ge.combine_runs([r1, r2], "x")
+    assert out.set_index("frame_idx").loc[0, "crop_name"] == "board" and sup == [0, 1] and len(out) == 2
+    bad = pd.concat([r2, r2.iloc[[0]].assign(crop="")])           # conflict inside one run still raises
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        ge.combine_runs([r1, bad], "x")
+
+
+def test_tier_d_combination_equals_step3_union():
+    """On the saved development outputs, combine_runs reproduces step 3's union."""
+    import pytest
+    root = Path(__file__).resolve().parents[1] / "paper" / "results"
+    if not (root / "prompt_decision_v1").exists():
+        pytest.skip("private results not present")
+    runs = [pd.read_csv(root / r / "scored.csv") for r in ("prompt_decision_v1", "prompt_decision_low_v1",
+                                                          "prompt_decision_high_v1")]
+    out, _, sup = ge.combine_runs(runs, "tierD")
+    union = pd.concat(runs, ignore_index=True).drop_duplicates(ge.KEYS)
+    key = ge.KEYS + ["crop_name", "full_name", "crop"]
+    pd.testing.assert_frame_equal(out[key].astype(str).sort_values(ge.KEYS).reset_index(drop=True),
+                                  union[key].astype(str).sort_values(ge.KEYS).reset_index(drop=True))
+    assert sup == [0, 119, 380]

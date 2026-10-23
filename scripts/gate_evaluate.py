@@ -128,6 +128,25 @@ def check_vlm_rows(df: pd.DataFrame, label: str) -> tuple[pd.DataFrame, int]:
     return df.drop_duplicates(KEYS), n_dup
 
 
+def combine_runs(runs: list[pd.DataFrame], label: str) -> tuple[pd.DataFrame, int, list[int]]:
+    """Several development VLM runs (tier D: v1, low_v1, high_v1, in that order).
+    Each run is validated on its own (non-identical duplicates raise). Across
+    runs, a frame scored by an earlier-listed run keeps that run's row - the
+    step-3 union rule (`drop_duplicates(keep="first")` over the same order),
+    which also defined the tier D frame lists and the fixed-crop run's frames.
+    Rows superseded this way are counted per run, never silently merged."""
+    kept, n_dup, superseded, seen = [], 0, [], set()
+    for i, df in enumerate(runs):
+        df, d = check_vlm_rows(df, f"{label} run {i}")
+        n_dup += d
+        k = df[KEYS].astype(str).apply(tuple, axis=1)
+        mask = ~k.isin(seen)
+        superseded.append(int((~mask).sum()))
+        kept.append(df[mask.to_numpy()])
+        seen |= set(k)
+    return pd.concat(kept, ignore_index=True), n_dup, superseded
+
+
 def frame_availability(requested: pd.DataFrame, df: pd.DataFrame, failed: pd.Series) -> pd.Series:
     """Per requested frame: ok | failed | missing."""
     key = lambda x: list(map(tuple, x[KEYS].astype(str).values))  # noqa: E731
@@ -283,8 +302,8 @@ def load_rotation(rot: str, rc: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]
     def restrict(df):
         return df[df[KEYS].astype(str).apply(tuple, axis=1).isin(keyset)]
 
-    scored, dup_s = check_vlm_rows(restrict(pd.concat([pd.read_csv(q) for q in rc["vlm_scored"]],
-                                                      ignore_index=True)), f"{rot} scored")
+    scored, dup_s, superseded = combine_runs([restrict(pd.read_csv(q)) for q in rc["vlm_scored"]],
+                                             f"{rot} scored")
     fx, dup_f = check_vlm_rows(restrict(pd.read_csv(rc["vlm_fixed"])), f"{rot} fixed")
     # truth: the frozen membership is authoritative; the primary VLM run must agree
     t = scored.groupby("sequence_id").truth.nunique()
@@ -317,6 +336,7 @@ def load_rotation(rot: str, rc: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]
     tot = per[[c for c in per if c.startswith("detector_")]].sum(axis=1)   # requested frames
     acct.update(evaluated_seqs=len(sd), excluded_seqs=len(member) - len(sd),
                 duplicate_rows_dropped={"scored": dup_s, "fixed": dup_f, "detector": dup_d},
+                scored_rows_superseded_by_earlier_run=superseded,
                 fixed_truth_overwritten=fx_truth_mismatch,
                 frames={f"{c}_{st}": int((av[c] == st).sum()) for c in ("detector", "vlm", "fixed")
                         for st in ("ok", "failed", "missing")},
