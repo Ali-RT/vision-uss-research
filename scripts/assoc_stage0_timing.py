@@ -227,7 +227,8 @@ def audit_clip(row, raw_root: Path, frames_root: Path, res: set[str]):
                     dt_min=round(float(np.nanmin(dpts)), 3), dt_median=round(float(np.nanmedian(dpts)), 3),
                     dt_max=round(float(np.nanmax(dpts)), 3),
                     dt_cv=round(float(np.nanstd(dpts) / np.nanmean(dpts)), 3))
-        mf4 = next(iter(sorted(seq_dir.glob("*.mf4"))), None)
+        # case-insensitive: several rigs store .MF4 (stage0_timing_v1 missed them)
+        mf4 = next(iter(sorted(p for p in seq_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mf4")), None)
         if mf4 is None:
             raise FileNotFoundError("no_mf4")
         mdf = MDF(str(mf4))
